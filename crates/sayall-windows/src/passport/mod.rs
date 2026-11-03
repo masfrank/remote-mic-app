@@ -13,6 +13,7 @@
 //! runtime.stop()?;
 //! ```
 
+pub(crate) mod ime_probe;
 mod net;
 mod session;
 

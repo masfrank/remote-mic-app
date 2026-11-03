@@ -4,6 +4,7 @@
 //! 因此"旧会话音频进入新会话"在结构上不可能发生：代际由本驱动在会话开始时推进，
 //! 且 `AudioRuntime` 自身还会按 generation 再校验一次。
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -44,6 +45,15 @@ pub trait HoldKey: Send + Sync {
     fn ready(&self) -> bool {
         true
     }
+    /// P3.1 观测：`press` 成功后的两次延迟观测；默认不观测（测试与无 IME 场景）。
+    fn observe_press(
+        &self,
+        _generation: u64,
+        _epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    ) {
+    }
+    /// P3.1 观测：释放时的最终状态；默认不观测。
+    fn observe_release(&self, _generation: u64) {}
 }
 
 pub(crate) enum SessionCommand {
@@ -65,6 +75,8 @@ pub(crate) struct SessionDriver {
     next_session_id: u8,
     held: bool,
     last_audio: Instant,
+    /// 当前会话代际（P3.1）：延迟观测据此丢弃过期样本。
+    epoch: Arc<AtomicU64>,
 }
 
 impl SessionDriver {
@@ -85,6 +97,7 @@ impl SessionDriver {
             next_session_id: 0,
             held: false,
             last_audio: Instant::now(),
+            epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -143,6 +156,8 @@ impl SessionDriver {
         }
         let generation = self.session.generation();
         self.shared.set_generation(generation);
+        // 先推进代际再起观测：上一会话的迟到样本据此作废。
+        self.epoch.store(generation, Ordering::SeqCst);
 
         if let Err(error) = self.audio.begin(generation) {
             self.shared.set_error(format!("音频会话开始失败：{error}"));
@@ -169,6 +184,8 @@ impl SessionDriver {
             "passport session action=start generation={generation} codec={} result=passed",
             audio.unwrap_or("unknown")
         ));
+        // P3.1：只观测，不恢复。基线由 hold 在 press 之前采样。
+        self.hold.observe_press(generation, Arc::clone(&self.epoch));
     }
 
     fn block(&mut self, samples: Vec<i16>) {
@@ -264,6 +281,9 @@ impl SessionDriver {
             return;
         }
         self.held = false;
+        // P3.1：释放瞬间的最终观测（只读，不影响按键时序）。
+        let generation = self.session.generation();
+        self.hold.observe_release(generation);
         if let Err(error) = self.hold.release() {
             self.shared
                 .set_error(format!("释放按住说话键失败：{error}"));

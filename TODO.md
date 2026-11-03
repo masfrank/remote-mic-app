@@ -1,4 +1,16 @@
 # TODO
+## 当前进度（2026-11-03）
+
+- P0：完成（协议探针，真机 bit-exact）
+- P1：完成（Passport UDP Runtime）
+- P2：完成（双设备模式 + 完整真机验收 + VB-CABLE 电平验证）
+- P3.1：完成（IME 首按观测，20/20 passed；暂不增加自动恢复）
+- P3.2：暂缓（等待真实异常样本）
+- 短按动作专项验收：按需执行
+
+后续（按需）：把 Passport 三个实体键接入按键映射——上键按住说话已支持；
+下键=回车、长按确定键=退出语音输入，需要先确认固件是否为后两者发送事件。
+
 
 ## 语音识别"能出字但对不上"的定位链（2026-10-27 用户报障，已定位为配置问题）
 
@@ -502,3 +514,17 @@
 - [x] VB-CABLE 出声（2026-11-03，客观测量）：Passport 会话 `blocks=15`、`samples=24000` 期间，
       `CABLE Output` 采集到 147969 帧、峰值 **-6.2 dBFS**（阈值 -60 dBFS）；PCM 确实到达虚拟声卡。
 - [ ] 完整应用构建：仍需 `src-tauri/sayall-helper.exe` 与 `frida-gadget.dll`（不入库的构建产物）。
+
+## P3.1 Passport IME 首按观测（2026-11-03，只观测不恢复）
+
+- [x] `crates/sayall-windows/src/passport/ime_probe.rs`：press 前记录 marker 基线；
+      800ms / 1500ms 两次观测；generation 过期即丢弃；release 记录最终状态。
+- [x] 判据全部复用 BLE：`ime::mic_marker_for`、`wetype_revive::mic_observation_for` /
+      `response_since`、`key_suppressor::wetype_marker_count`、`reaction_verdict`。
+- [x] 自动化：ime_probe 6 条单测；`cargo test -p sayall-windows --lib` 498 通过、
+      core 102、Passport UDP 6、device_mode 4。
+- [x] 真机 20 次（微信输入法，快捷键 Ctrl+Win）：**passed 20/20**（10 次正常 + 10 次先切走输入法），
+      800ms 即 `mic=observed / reaction=reacted`；无 delayed / unconfirmed / failed。
+- [x] 采集脚本教训：第一轮 20 次全 `not_observed`，根因是脚本把按住说话键写成右 Shift；
+      微信输入法必须由用户配置的 Ctrl+Win 触发。脚本已改为读 `voice-hold-hotkey.json`。
+- [ ] 结论：没有失败样本，**暂不进入 P3.2 自动恢复**；保留观测继续积累异常样本。

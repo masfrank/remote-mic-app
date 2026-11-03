@@ -709,11 +709,20 @@ struct PassportHold {
     send_input: Arc<send_input_windows::SendInputRuntime>,
     chord: Arc<Mutex<Option<send_input::KeyChord>>>,
     tool: Arc<Mutex<Option<VoiceInputTool>>>,
+    /// P3.1 观测基线：`press` 之前采样，`observe_press` 取走。
+    pending_probe: Mutex<Option<passport::ime_probe::Baseline>>,
+    /// 保留到 release，用于记录最终状态。
+    last_probe: Mutex<Option<passport::ime_probe::Baseline>>,
 }
 
 #[cfg(windows)]
 impl passport::HoldKey for PassportHold {
     fn press(&self) -> Result<(), String> {
+        // P3.1：基线必须在注入之前采样，否则本次会话自己就可能污染基线。
+        let probe = passport::ime_probe::baseline(*lock(&self.tool));
+        *lock(&self.pending_probe) = probe;
+        *lock(&self.last_probe) = probe;
+
         if let Some(tool) = *lock(&self.tool) {
             if let Err(error) =
                 crate::ime::ensure_session_ime(tool, crate::ime::ImeSwitchScope::VoicePress)
@@ -746,6 +755,29 @@ impl passport::HoldKey for PassportHold {
 
     fn ready(&self) -> bool {
         lock(&self.chord).is_some()
+    }
+
+    fn observe_press(&self, generation: u64, epoch: Arc<std::sync::atomic::AtomicU64>) {
+        if let Some(baseline) = lock(&self.pending_probe).take() {
+            passport::ime_probe::spawn(generation, epoch, baseline);
+        }
+    }
+
+    fn observe_release(&self, generation: u64) {
+        let Some(baseline) = *lock(&self.last_probe) else {
+            return;
+        };
+        let (mic, reaction) = passport::ime_probe::sample(&baseline);
+        passport::ime_probe::note(format!(
+            "passport voice_verify generation={generation} phase=release tool={} mic={} reaction={}",
+            baseline.tool,
+            mic.as_log_str(),
+            match reaction {
+                crate::wetype_revive::WetypeReaction::Reacted => "reacted",
+                crate::wetype_revive::WetypeReaction::NotReacted => "not_reacted",
+                crate::wetype_revive::WetypeReaction::Unknown => "unknown",
+            }
+        ));
     }
 }
 
@@ -839,6 +871,8 @@ impl Default for WindowsPlatform {
                         send_input: Arc::clone(&send_input),
                         chord: Arc::clone(&voice_hold_hotkey),
                         tool: Arc::clone(&voice_input_tool),
+                        pending_probe: Mutex::new(None),
+                        last_probe: Mutex::new(None),
                     }),
                     engine: Some(button_mapping.sender()),
                     port: passport::PORT,
