@@ -437,3 +437,9 @@
 - 复用的产品语义：默认关闭；只记录语音新增文字；按应用与日期组织；全部应用最近 7 天、单应用全部历史；删除单条/应用/全部；单条上限 8000 字符；捕获失败静默跳过。
 - Windows 实现差异：文本读取使用 UI Automation（`ValuePattern` / `TextPattern`）而非 macOS Accessibility；图标使用 `PrivateExtractIconsW` 提取 64×64 PNG 并按应用键缓存；删除使用 Windows 回收站；入口为侧栏独立页面；存储根为 `%LOCALAPPDATA%\SayAll\transcripts\v1`，不承诺与 Mac 历史互通。
 - 不采用 Mac 的原始录音、本机 Agent/MCP 访问与跨端迁移能力；这些能力不在本次范围内。
+
+## 2026-11-03 FoloToy AI Passport 协议来源（P0 探针）
+
+- 协议与格式参考（MIT）：`manchunx7-bit/folo-ai-passport-voice`，本地 HEAD `d89e0ca`。来源文件：`windows/udp_transport.py`（UDP 33333、报文类型 0x01–0x04、beacon/pc.status 节奏与超时）、`device/main/apps/voice/udp_audio.h`（`[seq][0x80]` 分片头语义、`VOICE_UDP_PEER_TIMEOUT_MS=3000`）、`windows/adpcm.py` 与 `device/main/apps/voice/adpcm.c`（804B IMA ADPCM 块：4B 块头、块头 predictor 即第 0 个输出样本、低半字节先）、`app_state.c`（`pc_ready = audioReady && hotkeyReady`，`PC_STATUS_TIMEOUT_MS=3500`）。
+- 仅复用公开协议常量与报文格式，未复制其 Python/C 实现；解码使用本仓库 `sayall-core::ImaAdpcmDecoder`（`NibbleOrder::LowFirst` + 块头重置）。
+- 探针 `crates/sayall-windows/examples/passport_probe.rs` 不进入产品路径，只用于 P0 可行性验证；与参考实现的逐块 bit-exact 比对方法与结论见该文件头注释。
