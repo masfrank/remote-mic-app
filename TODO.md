@@ -495,5 +495,10 @@
       `pnpm build`（`vue-tsc --noEmit` + `vite build`）全部通过。
 - [x] 真机（Passport 入口）：`switch_device_mode(Passport)` 启动 → 发现 `192.168.110.79` →
       按住说话 `sessions=1`、`blocks=1`、`samples=1600`、`generation=1`，0 丢块/0 乱序。
-- [ ] 真机（回切 BLE）：切回 BLE 后跑一次 RC003 语音会话（确认互斥、无卡键与 VB-CABLE 出声）。
+- [x] 真机（回切 BLE，2026-11-03）：切回 BLE 后连接 RC003（`phase=Ready`），按住语音键
+      `decoded_samples 0 → 480`，断开正常；Passport 与 BLE 互斥无卡键。
+- [x] 真机（Passport 体验）：连续会话 `generation=2`、`voice.end` 后离开 `Streaming`、
+      12 秒断链回 `Listening`、回到界面后重新发现。
+- [x] VB-CABLE 出声（2026-11-03，客观测量）：Passport 会话 `blocks=15`、`samples=24000` 期间，
+      `CABLE Output` 采集到 147969 帧、峰值 **-6.2 dBFS**（阈值 -60 dBFS）；PCM 确实到达虚拟声卡。
 - [ ] 完整应用构建：仍需 `src-tauri/sayall-helper.exe` 与 `frida-gadget.dll`（不入库的构建产物）。
