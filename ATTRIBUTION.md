@@ -443,3 +443,4 @@
 - 协议与格式参考（MIT）：`manchunx7-bit/folo-ai-passport-voice`，本地 HEAD `d89e0ca`。来源文件：`windows/udp_transport.py`（UDP 33333、报文类型 0x01–0x04、beacon/pc.status 节奏与超时）、`device/main/apps/voice/udp_audio.h`（`[seq][0x80]` 分片头语义、`VOICE_UDP_PEER_TIMEOUT_MS=3000`）、`windows/adpcm.py` 与 `device/main/apps/voice/adpcm.c`（804B IMA ADPCM 块：4B 块头、块头 predictor 即第 0 个输出样本、低半字节先）、`app_state.c`（`pc_ready = audioReady && hotkeyReady`，`PC_STATUS_TIMEOUT_MS=3500`）。
 - 仅复用公开协议常量与报文格式，未复制其 Python/C 实现；解码使用本仓库 `sayall-core::ImaAdpcmDecoder`（`NibbleOrder::LowFirst` + 块头重置）。
 - 探针 `crates/sayall-windows/examples/passport_probe.rs` 不进入产品路径，只用于 P0 可行性验证；与参考实现的逐块 bit-exact 比对方法与结论见该文件头注释。
+- P1 运行时（`crates/sayall-core/src/passport`、`crates/sayall-windows/src/passport`）同样只实现上述公开协议常量与块格式，未移植其 Python/C 逻辑；会话、音频与按键全部复用本仓库既有实现。

@@ -113,6 +113,9 @@ mod lock_open_with_guard;
 pub mod macro_runtime;
 /// 本机的原生系统架构（x64 / arm64），与"本进程的仿真架构"区分开。
 pub mod os_arch;
+/// FoloToy AI Passport（Wi-Fi/UDP）通道：独立运行时，与 BLE 平行。
+#[cfg(windows)]
+pub mod passport;
 #[cfg(windows)]
 mod power;
 pub mod raw_input;

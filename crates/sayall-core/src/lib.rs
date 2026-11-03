@@ -2,6 +2,7 @@ pub mod adpcm;
 pub mod atvv;
 pub mod frame;
 pub mod macros;
+pub mod passport;
 pub mod pcm;
 pub mod pipeline;
 pub mod portable_macros;
