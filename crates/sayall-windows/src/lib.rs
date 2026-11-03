@@ -2,7 +2,7 @@ use button_mapping::{ButtonMappingRuntime, ButtonMappingSnapshot, MappingInjecto
 use focus::RecordedFocusTarget;
 use raw_input::{RawInputPhase, RawInputSnapshot, RemoteButton};
 use sayall_core::settings::VoiceInputTool;
-use sayall_core::{AtvvCapabilities, VoiceSessionState};
+use sayall_core::{AtvvCapabilities, DeviceMode, VoiceSessionState};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fmt;
@@ -168,6 +168,12 @@ pub struct PlatformSnapshot {
     pub audio: AudioSnapshot,
     pub raw_input: RawInputSnapshot,
     pub button_mapping: ButtonMappingSnapshot,
+    /// 当前设备模式（P2）：BLE 与 Passport 互斥。
+    pub device_mode: DeviceMode,
+    /// Passport 通道状态；BLE 模式下恒为 `Stopped`。
+    pub passport: sayall_core::passport::PassportSnapshot,
+    /// 最近一次模式切换失败的原因（成功后清空）；用于启动时失败也可被界面看见。
+    pub device_mode_error: Option<String>,
 }
 
 #[cfg(windows)]
@@ -587,6 +593,15 @@ pub struct WindowsPlatform {
     enhanced_capture_enabled: Arc<AtomicBool>,
     #[cfg(windows)]
     send_input: Arc<send_input_windows::SendInputRuntime>,
+    /// FoloToy AI Passport（Wi-Fi/UDP）通道。P1 由隐藏开发开关启动，
+    /// 未启动时不占端口、不起线程，BLE 行为完全不变。
+    #[cfg(windows)]
+    passport: Arc<passport::PassportRuntime>,
+    /// P2 设备模式与切换互斥：同一时间只允许一个设备 Runtime 活动。
+    device_mode: Arc<Mutex<DeviceMode>>,
+    mode_switch: Arc<Mutex<()>>,
+    /// 最近一次模式切换失败原因；`None` = 上次切换成功或尚未切换。
+    mode_error: Arc<Mutex<Option<String>>>,
     /// 回眸文字捕获（默认关闭；状态机跨平台可单测，UIA 后端仅 Windows）。
     transcript_capture: Arc<transcript_capture::TranscriptCaptureRuntime>,
 }
@@ -630,6 +645,107 @@ impl MappingInjector for UnsupportedInjector {
 
     fn learn_focus_point(&self, _target: &str) -> Result<crate::focus::RecordedPoint, String> {
         Err("记录点击位置仅在 Windows 上可用".to_owned())
+    }
+}
+
+/// Passport 音频出口：全部转发到现有 `AudioRuntime`，不新建第二套 WASAPI 引擎。
+#[cfg(windows)]
+struct PassportAudio {
+    audio: Arc<audio::AudioRuntime>,
+}
+
+#[cfg(windows)]
+fn passport_audio_error(error: PlatformError) -> String {
+    match error {
+        // 背压不是故障：驱动只计数，不能因此中止会话。
+        PlatformError::AudioQueueOverflow => passport::QUEUE_OVERFLOW.to_owned(),
+        other => other.to_string(),
+    }
+}
+
+#[cfg(windows)]
+impl passport::VoiceAudio for PassportAudio {
+    fn begin(&self, generation: u64) -> Result<(), String> {
+        self.audio
+            .begin_session(generation)
+            .map(|_| ())
+            .map_err(passport_audio_error)
+    }
+
+    fn enqueue(&self, generation: u64, samples: Vec<i16>) -> Result<(), String> {
+        self.audio
+            .enqueue_samples(generation, samples)
+            .map_err(passport_audio_error)
+    }
+
+    fn finish(&self, generation: u64) -> Result<(), String> {
+        self.audio
+            .finish_session(generation)
+            .map(|_| ())
+            .map_err(passport_audio_error)
+    }
+
+    fn interrupt(&self) -> Result<(), String> {
+        self.audio
+            .interrupt_session()
+            .map(|_| ())
+            .map_err(passport_audio_error)
+    }
+
+    fn ready(&self) -> bool {
+        matches!(
+            self.audio.snapshot().phase,
+            AudioPhase::Ready | AudioPhase::Streaming
+        )
+    }
+}
+
+/// Passport 按住说话：与 BLE 路径共用"切输入法 + 按住/释放同一和弦"的语义。
+///
+/// 这里只复用两条原语，不复制 `ble.rs` 里那套 marker 校验/救回阶梯——那是
+/// RC003 真机排障的产物，P1 不引入，差异记在评估报告的待验证项里。
+#[cfg(windows)]
+struct PassportHold {
+    send_input: Arc<send_input_windows::SendInputRuntime>,
+    chord: Arc<Mutex<Option<send_input::KeyChord>>>,
+    tool: Arc<Mutex<Option<VoiceInputTool>>>,
+}
+
+#[cfg(windows)]
+impl passport::HoldKey for PassportHold {
+    fn press(&self) -> Result<(), String> {
+        if let Some(tool) = *lock(&self.tool) {
+            if let Err(error) =
+                crate::ime::ensure_session_ime(tool, crate::ime::ImeSwitchScope::VoicePress)
+            {
+                gatt_note(format!(
+                    "passport voice_hold action=ime result=failed reason={error}"
+                ));
+            }
+        }
+        match lock(&self.chord).clone() {
+            Some(chord) => self
+                .send_input
+                .press(&chord)
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            None => Ok(()),
+        }
+    }
+
+    fn release(&self) -> Result<(), String> {
+        match lock(&self.chord).clone() {
+            Some(chord) => self
+                .send_input
+                .release(&chord)
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            None => Ok(()),
+        }
+    }
+
+    fn ready(&self) -> bool {
+        lock(&self.chord).is_some()
     }
 }
 
@@ -714,6 +830,24 @@ impl Default for WindowsPlatform {
             raw_input_windows::set_device_arrived_notify(Box::new(move || {
                 arrived_runtime.notify_remote_device_arrived();
             }));
+            let passport = Arc::new(
+                passport::PassportRuntime::new(passport::PassportConfig {
+                    audio: Arc::new(PassportAudio {
+                        audio: Arc::clone(&audio),
+                    }),
+                    hold: Arc::new(PassportHold {
+                        send_input: Arc::clone(&send_input),
+                        chord: Arc::clone(&voice_hold_hotkey),
+                        tool: Arc::clone(&voice_input_tool),
+                    }),
+                    engine: Some(button_mapping.sender()),
+                    port: passport::PORT,
+                    extra_peers: Vec::new(),
+                })
+                .with_gain(Arc::clone(&gain_db)),
+            );
+            // P1 的隐藏开发开关在 P2 由正式模式切换取代：启动时按持久化配置
+            // 调用 `switch_device_mode`（见 src-tauri 的 setup），这里不自动启动任何 Runtime。
             Self {
                 usage,
                 voice_hold_hotkey,
@@ -732,6 +866,10 @@ impl Default for WindowsPlatform {
                 rc003_bridge,
                 enhanced_capture_enabled: Arc::new(AtomicBool::new(false)),
                 send_input,
+                passport,
+                device_mode: Arc::new(Mutex::new(DeviceMode::Ble)),
+                mode_switch: Arc::new(Mutex::new(())),
+                mode_error: Arc::new(Mutex::new(None)),
                 transcript_capture,
             }
         }
@@ -763,6 +901,9 @@ impl Default for WindowsPlatform {
                 button_mapping,
                 macro_runtime,
                 raw_input_snapshot,
+                device_mode: Arc::new(Mutex::new(DeviceMode::Ble)),
+                mode_switch: Arc::new(Mutex::new(())),
+                mode_error: Arc::new(Mutex::new(None)),
                 transcript_capture,
             }
         }
@@ -884,6 +1025,95 @@ impl WindowsPlatform {
 
     pub fn voice_hold_hotkey(&self) -> Option<send_input::KeyChord> {
         lock(&self.voice_hold_hotkey).clone()
+    }
+
+    /// 当前设备模式。
+    pub fn device_mode(&self) -> DeviceMode {
+        *lock(&self.device_mode)
+    }
+
+    /// 切换设备模式（P2 的唯一生命周期入口）。
+    ///
+    /// 幂等；切换顺序固定为「先停当前 Runtime，再启动目标」，目标启动失败时保持原模式
+    /// 并返回错误——绝不静默回退成"界面显示 Passport 已连接"。
+    pub fn switch_device_mode(&self, mode: DeviceMode) -> Result<(), PlatformError> {
+        let result = self.switch_device_mode_inner(mode);
+        let mut mode_error = lock(&self.mode_error);
+        match &result {
+            Ok(()) => *mode_error = None,
+            Err(error) => *mode_error = Some(error.to_string()),
+        }
+        result
+    }
+
+    /// 最近一次模式切换失败原因（成功后清空）。
+    pub fn device_mode_error(&self) -> Option<String> {
+        lock(&self.mode_error).clone()
+    }
+
+    fn switch_device_mode_inner(&self, mode: DeviceMode) -> Result<(), PlatformError> {
+        let _guard = lock(&self.mode_switch);
+        let current = self.device_mode();
+
+        if current == mode {
+            // 同模式重入：Passport 允许重试启动（端口占用释放后的常见恢复路径）。
+            #[cfg(windows)]
+            if mode == DeviceMode::Passport {
+                self.passport.start()?;
+            }
+            #[cfg(not(windows))]
+            if mode == DeviceMode::Passport {
+                return Err(PlatformError::UnsupportedPlatform);
+            }
+            return Ok(());
+        }
+
+        #[cfg(not(windows))]
+        if mode == DeviceMode::Passport {
+            return Err(PlatformError::UnsupportedPlatform);
+        }
+
+        // 1) 停当前：Passport 停止会释放按住键并中断音频会话；BLE 走正常断开。
+        #[cfg(windows)]
+        match current {
+            DeviceMode::Passport => self.passport.stop()?,
+            DeviceMode::Ble => {
+                let _ = self.disconnect_remote();
+            }
+        }
+
+        // 2) 起目标：失败即返回，模式保持原值。
+        #[cfg(windows)]
+        if mode == DeviceMode::Passport {
+            self.passport.start()?;
+        }
+
+        *lock(&self.device_mode) = mode;
+        #[cfg(windows)]
+        gatt_note(format!(
+            "device_mode action=switch from={} to={} result=passed",
+            device_mode_token(current),
+            device_mode_token(mode)
+        ));
+        Ok(())
+    }
+
+    /// Passport 通道状态（P2 起由连接页展示）。
+    #[cfg(windows)]
+    pub fn passport_snapshot(&self) -> passport::PassportSnapshot {
+        self.passport.snapshot()
+    }
+
+    /// 独立启动 Passport 运行时（幂等）。
+    #[cfg(windows)]
+    pub fn start_passport(&self) -> Result<(), PlatformError> {
+        self.passport.start()
+    }
+
+    /// 独立停止 Passport 运行时（幂等，会释放按住键与音频会话）。
+    #[cfg(windows)]
+    pub fn stop_passport(&self) -> Result<(), PlatformError> {
+        self.passport.stop()
     }
 
     /// 更新「按住说话快捷键」，并联动语音键报告层合成配置（2026-09-29 产品化：
@@ -1105,6 +1335,9 @@ impl WindowsPlatform {
                 audio,
                 raw_input,
                 button_mapping,
+                device_mode: self.device_mode(),
+                passport: self.passport.snapshot(),
+                device_mode_error: self.device_mode_error(),
             }
         }
 
@@ -1126,6 +1359,9 @@ impl WindowsPlatform {
                 },
                 raw_input: self.raw_input_snapshot(),
                 button_mapping: self.button_mapping_snapshot(),
+                device_mode: self.device_mode(),
+                passport: sayall_core::passport::PassportSnapshot::default(),
+                device_mode_error: None,
             }
         }
     }
@@ -1305,6 +1541,14 @@ impl WindowsPlatform {
     pub fn connect_remote(&self, device_id: String) -> Result<ConnectionSnapshot, PlatformError> {
         #[cfg(windows)]
         {
+            // 两种模式互斥：Passport 模式下不允许建立 BLE 会话，避免两条链路
+            // 同时占用同一个 `AudioRuntime` 并互相顶掉 generation。
+            if self.device_mode() != DeviceMode::Ble {
+                return Err(PlatformError::WindowsApi(
+                    "当前是 FoloToy AI Passport 模式，请先切换回蓝牙设备模式再连接遥控器"
+                        .to_owned(),
+                ));
+            }
             // 用户在应用里选/换遥控器的**那一刻**就发布「正在用的那支」的地址
             // （2026-10-13 现场补充）：会话要等能力协商完才 Ready，而 Raw Input
             // 绑定与助手选宿主都需要这个地址——只等 Ready 的话，应用刚启动、或
@@ -1343,6 +1587,12 @@ impl WindowsPlatform {
     pub fn restore_remote(&self, device_id: String) -> Result<ConnectionSnapshot, PlatformError> {
         #[cfg(windows)]
         {
+            // Passport 模式下不恢复 BLE 会话：模式互斥，启动流程只在 BLE 模式调用本方法。
+            if self.device_mode() != DeviceMode::Ble {
+                return Err(PlatformError::WindowsApi(
+                    "当前是 FoloToy AI Passport 模式，跳过蓝牙遥控器恢复".to_owned(),
+                ));
+            }
             // 启动时按已保存的选择立刻发布（同 `connect_remote` 的理由）：
             // 不等会话 Ready，Raw Input 就能在"两支同型号同时在位"时绑对那一支。
             // 目标刚变：立刻叫醒助手的 watchdog（`R` 行），不必等它自己的 2 秒轮询——
@@ -1491,6 +1741,13 @@ impl WindowsPlatform {
             let _ = chord;
             Err(PlatformError::UnsupportedPlatform)
         }
+    }
+}
+
+fn device_mode_token(mode: DeviceMode) -> &'static str {
+    match mode {
+        DeviceMode::Ble => "ble",
+        DeviceMode::Passport => "passport",
     }
 }
 

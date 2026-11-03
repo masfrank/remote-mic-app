@@ -86,7 +86,8 @@ impl AppIconIdentifier {
 /// 5 = 2026-10-24 使用统计加入按控件计数与单次语音排行（字段向后兼容，不需要数据迁移）。
 /// 6 = 2026-10-25 回眸开关（默认关闭，字段向后兼容）。
 /// 7 = 2026-10-25 回眸原始录音开关（默认关闭，只有回眸开启时生效）。
-const CURRENT_SCHEMA_VERSION: u32 = 7;
+/// 8 = 2026-11-03 设备模式（BLE / Passport，默认 BLE；旧配置缺字段即 BLE）。
+const CURRENT_SCHEMA_VERSION: u32 = 8;
 
 /// `app_icon` 被视为"用户真实选择"的最低代次（2026-10-04）。
 ///
@@ -94,11 +95,38 @@ const CURRENT_SCHEMA_VERSION: u32 = 7;
 /// 用户没做过选择——升级时一律改用几何鸭；从 4 起（本版本写下的选择）才认用户的值。
 const APP_ICON_CHOICE_MIN_SCHEMA_VERSION: u32 = 4;
 
+/// 设备模式：「蓝牙遥控器」与「FoloToy AI Passport（Wi-Fi/UDP）」。
+///
+/// 两种模式互斥，同一时间只有一个 Runtime 活动。旧配置没有该字段时默认 `Ble`；
+/// 非法值也回退 `Ble`（诊断由 `src-tauri` 的配置解析处记录，见 `settings::parse_settings`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceMode {
+    #[default]
+    Ble,
+    Passport,
+}
+
+/// 非法或缺失一律回退 `Ble`，且不能让整个配置文件解析失败。
+pub fn deserialize_device_mode<'de, D>(deserializer: D) -> Result<DeviceMode, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value.as_str() {
+        Some("passport") => DeviceMode::Passport,
+        _ => DeviceMode::Ble,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
     pub schema_version: u32,
     pub selected_remote_id: Option<String>,
+    /// 当前设备模式；`Ble` 是默认值，旧配置缺字段时落回这里。
+    #[serde(default, deserialize_with = "deserialize_device_mode")]
+    pub device_mode: DeviceMode,
     pub audio_endpoint_id: Option<String>,
     pub audio_endpoint_name: Option<String>,
     pub gain_db: f32,
@@ -165,6 +193,7 @@ impl Default for AppSettings {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             selected_remote_id: None,
+            device_mode: DeviceMode::Ble,
             audio_endpoint_id: None,
             audio_endpoint_name: None,
             gain_db: 0.0,
@@ -473,5 +502,45 @@ mod tests {
         assert!(encoded.contains("\"lock_mapping_selection\":false"));
         let decoded: AppSettings = serde_json::from_str(&encoded).unwrap();
         assert!(!decoded.normalized().lock_mapping_selection);
+    }
+
+    #[test]
+    fn device_mode_defaults_to_ble_and_round_trips() {
+        assert_eq!(AppSettings::default().device_mode, DeviceMode::Ble);
+
+        let passport = AppSettings {
+            device_mode: DeviceMode::Passport,
+            ..AppSettings::default()
+        };
+        let encoded = serde_json::to_string(&passport).unwrap();
+        assert!(encoded.contains("\"device_mode\":\"passport\""));
+        let decoded: AppSettings = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.device_mode, DeviceMode::Passport);
+    }
+
+    #[test]
+    fn legacy_settings_without_device_mode_fall_back_to_ble() {
+        let legacy: AppSettings = serde_json::from_str(
+            r#"{"schema_version":7,"gain_db":0.0,"voice_trigger_mode":"hold"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.device_mode, DeviceMode::Ble);
+
+        // 迁移只推进代次，不改变模式。
+        let normalized = legacy.normalized();
+        assert_eq!(normalized.schema_version, 8);
+        assert_eq!(normalized.device_mode, DeviceMode::Ble);
+    }
+
+    #[test]
+    fn illegal_device_mode_falls_back_to_ble_instead_of_failing_the_file() {
+        for raw in [r#""unknown_mode""#, "42", "null", "{}"] {
+            let json = format!(
+                r#"{{"schema_version":8,"gain_db":0.0,"voice_trigger_mode":"hold","device_mode":{raw}}}"#
+            );
+            let settings: AppSettings = serde_json::from_str(&json)
+                .unwrap_or_else(|error| panic!("{raw} 解析失败: {error}"));
+            assert_eq!(settings.device_mode, DeviceMode::Ble, "raw={raw}");
+        }
     }
 }

@@ -482,3 +482,18 @@
   - 体积实测：治理前约 107 MB/天（存量 768 MB）→ 治理后健康态约 **3 MB/天**（主程序心跳行 406 B、助手 `[HB]` 行 618 B）；10 MB/文件 ⇒ 约 3 天一换、保留 5 份 ≈ 50 MB 封顶。
   - 自验：应用新增 5 例单测、助手新增 3 例单测；`cargo test --workspace` 全绿（312 + 106 + …）、助手 `--selftest` 通过、`cargo fmt --check` 干净。**真机活体**：助手侧轮转已实测生效——769 MB 旧文件被改名成带时间戳的旧文件、当前文件新建为 KB 级（证据见 [Bugs/2026-10-08-rc003-stale-tap-self-heal.md](Bugs/2026-10-08-rc003-stale-tap-self-heal.md) 同批记录）；主程序侧随本轮本地包安装后核对"两个写入方仍落在同一个当前文件"。
   - 历史大文件：那次 769 MB 旧文件在轮转后人工回收（走回收站）；此后由「10 MB/文件 + 保留 5 份」自然收敛。
+
+## FoloToy AI Passport 双设备模式（P2，2026-11-03）
+
+- [x] 正式 `DeviceMode`（`ble` 默认 / `passport`）与配置代次 8；旧配置缺字段、非法值均安全回退 `ble`。
+- [x] `WindowsPlatform::switch_device_mode`：两种 Runtime 互斥、先停当前再起目标；启动失败保持原模式，
+      原因写入 `PlatformSnapshot.deviceModeError`，界面不得显示 Passport 已连接。
+- [x] Tauri 命令 `set_device_mode`（两套 handler 均已注册）；快照新增 `deviceMode` / `passport` / `deviceModeError`。
+- [x] 连接页「设备模式」选择、切换中禁点、Passport 状态/设备地址/会话统计/未发现设备提示。
+- [x] 自动化：`cargo test -p sayall-core` 102、`--lib` 492、Passport UDP 6、device_mode 4、IPC 契约 1、配置持久化 1，全部通过。
+- [x] 前端验收（2026-11-03）：`pnpm install --frozen-lockfile`、`pnpm test`（36 文件 / 567 通过）、
+      `pnpm build`（`vue-tsc --noEmit` + `vite build`）全部通过。
+- [x] 真机（Passport 入口）：`switch_device_mode(Passport)` 启动 → 发现 `192.168.110.79` →
+      按住说话 `sessions=1`、`blocks=1`、`samples=1600`、`generation=1`，0 丢块/0 乱序。
+- [ ] 真机（回切 BLE）：切回 BLE 后跑一次 RC003 语音会话（确认互斥、无卡键与 VB-CABLE 出声）。
+- [ ] 完整应用构建：仍需 `src-tauri/sayall-helper.exe` 与 `frida-gadget.dll`（不入库的构建产物）。

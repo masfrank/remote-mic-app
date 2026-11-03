@@ -532,6 +532,32 @@ export interface ConnectionSnapshot {
 /** 与 Rust `VoiceAudioHealth` 逐字对应。 */
 export type VoiceAudioHealth = "unknown" | "full" | "degraded";
 
+/** 设备模式：BLE 遥控器（默认）或 FoloToy AI Passport（Wi-Fi/UDP）。 */
+export type DeviceMode = "ble" | "passport";
+
+export type PassportPhase =
+  | "stopped"
+  | "listening"
+  | "device_linked"
+  | "streaming"
+  | "error";
+
+/** 与 Rust `sayall_core::passport::PassportSnapshot` 一一对应。 */
+export interface PassportSnapshot {
+  phase: PassportPhase;
+  device: string | null;
+  port: number;
+  blocks: number;
+  samples: number;
+  lostBlocks: number;
+  outOfOrder: number;
+  badPackets: number;
+  sessions: number;
+  audioQueueDrops: number;
+  generation: number;
+  lastError: string | null;
+}
+
 export interface PlatformSnapshot {
   platform: string;
   windowsApiAvailable: boolean;
@@ -545,6 +571,14 @@ export interface PlatformSnapshot {
   audio: AudioSnapshot;
   rawInput: RawInputSnapshot;
   buttonMapping: ButtonMappingSnapshot;
+  /**
+   * P2 之前的历史快照缺少下列字段；真实 Runtime 始终发送。
+   * 界面用 `?? "ble"` / `?? null` 回落，不假定字段一定存在。
+   */
+  deviceMode?: DeviceMode;
+  passport?: PassportSnapshot;
+  /** 最近一次模式切换失败原因（成功后清空）。 */
+  deviceModeError?: string | null;
 }
 
 export interface RuntimeSnapshot {
@@ -792,6 +826,22 @@ const browserSnapshot: RuntimeSnapshot = {
       lastFired: null,
       lastError: null,
     },
+    deviceMode: "ble",
+    passport: {
+      phase: "stopped",
+      device: null,
+      port: 0,
+      blocks: 0,
+      samples: 0,
+      lostBlocks: 0,
+      outOfOrder: 0,
+      badPackets: 0,
+      sessions: 0,
+      audioQueueDrops: 0,
+      generation: 0,
+      lastError: null,
+    },
+    deviceModeError: null,
   },
 };
 
@@ -1045,6 +1095,16 @@ export async function getConnectionSnapshot(): Promise<ConnectionSnapshot> {
     return browserSnapshot.platform.connection;
   }
   return invoke<ConnectionSnapshot>("get_connection_snapshot");
+}
+
+/**
+ * 切换设备模式。失败时后端保持原模式并返回原因，调用方必须把错误展示给用户。
+ */
+export async function setDeviceMode(mode: DeviceMode): Promise<DeviceMode> {
+  if (!isTauriRuntime()) {
+    throw new Error("当前是浏览器预览，无法切换设备模式");
+  }
+  return invoke<DeviceMode>("set_device_mode", { mode });
 }
 
 export async function connectRemote(deviceId: string): Promise<ConnectionSnapshot> {

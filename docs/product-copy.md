@@ -35,6 +35,7 @@
 | 应用语言（设置页「通用」，2026-10-24） | 应用语言；三档「跟随系统」「简体中文」「English」；通用模块不显示行副标题；持久化 `application_language`（`system` / `zh-Hans` / `en`，对齐 Mac `AppLanguage`）；**全界面**跟随语言即时切换：侧栏、六个页面、向导 ①–⑦、弹窗、错误文案、托盘菜单与窗口标题；英文术语对齐 Mac（Routines / Full-key support / Doubao / WeType / App Language / System Default） | `SettingsPage.vue`、`AppSettings.application_language`、`src/lib/language.ts`、`src/lib/i18n.ts`、`src-tauri/src/lib.rs`（`apply_native_language`） |
 | 更新完成提示（启动时一次性） | 标题「无线麦已更新」、正文「已成功更新到版本 {版本号}。」、按钮「好」（对齐 Mac `update.completed.*`，原样移植）；只在“本次启动前刚完成更新”时出现一次 | `UpdateCompletedDialog.vue`、`launch_state.rs` |
 | 组合动作（侧边栏页 + 按键页动作分组） | 组合动作；步骤类型写「打开应用」「等待应用」「单键或快捷键」「聚焦输入框」「聚焦学习过的输入框」「打开网址」「执行已有组合动作」（对齐 Mac `macro.step.*`；「系统与媒体动作」不再作为新步骤提供，旧数据仍可显示与执行）；终态写「组合动作执行成功」「组合动作已执行，但无法确认第三方 App 的结果」「组合动作已取消」「组合动作执行超时」等（对齐 Mac `macro.status.execution.*`） | `MacrosPage.vue`、`ButtonsPage.vue`、`src/lib/bridge.ts`（`macroActionLabel` / `macroTerminalLabel` / `macroStepSummary`） |
+| 设备模式（连接页，2026-11-03） | 「设备模式」；两个选项写「蓝牙设备」「FoloToy AI Passport」（品牌名不翻译）；Passport 提示句“请让 AI Passport 停留在「AI 语音」界面；只有该界面才会开启 Wi-Fi 语音通道。”；切换中显示「切换中…」；Passport 状态写「未启动」「等待设备」「设备已连接」「正在接收语音」「异常」；找不到设备写「尚未发现设备」（不得写「已连接」） | `ConnectionPage.vue`、`PlatformSnapshot.deviceMode`、`AppSettings.device_mode` |
 
 `Remote Mic` 仅用于历史兼容标识、代码标识符与既有发布资产，不出现在新文案里。
 型号名只允许在 `remoteModelLabel` 定义一次，其他地方引用它（2026-10-01 教训：连接页
@@ -58,6 +59,7 @@
 | 全按键支持 | Full-key support | 句首大写，其余小写 |
 | 遥控器语音键 | Voice Button | 遥控器上的语音键；相关句子用 voice button |
 | 按住说话快捷键（输入工具触发键） | Voice Trigger Key / voice shortcut | 对齐 Mac `connection.voice_key_mode.title` / `onboarding.voice_tool.*` |
+| 设备模式 | Device mode；选项 Bluetooth remote / FoloToy AI Passport | 连接页；品牌名不翻译 |
 | 单击 / 双击 | Single Press / Double Press | 遥控器按键触发方式；鼠标单击仍用 click |
 | 上一曲 / 下一曲 | Previous track / Next track | 对齐 Mac |
 | 小米蓝牙语音遥控器 2 / 2 Pro | Xiaomi Bluetooth Voice Remote 2 / 2 Pro | 包含「语音」与版本后缀 |

@@ -48,7 +48,7 @@ use recommendations::{
     go_back_recommendations, hide_recommendations, open_recommendations_website,
     retry_recommendations, show_recommendations,
 };
-use sayall_core::{AppIconIdentifier, AppLanguage, ThemePreference, VoiceInputTool};
+use sayall_core::{AppIconIdentifier, AppLanguage, DeviceMode, ThemePreference, VoiceInputTool};
 use updater::{
     check_app_update, get_app_update_preferences, install_app_update, set_app_update_preferences,
 };
@@ -1219,6 +1219,33 @@ async fn disconnect_remote(
         .await
         .map_err(|error| format!("断开任务失败：{error}"))?
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn set_device_mode(
+    mode: DeviceMode,
+    state: tauri::State<'_, AppState>,
+) -> Result<DeviceMode, String> {
+    let platform = Arc::clone(&state.platform);
+    let settings = state.settings.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        platform
+            .switch_device_mode(mode)
+            // 跨到前端的错误统一归并回公开形状，与连接类命令一致。
+            .map_err(sayall_windows::PlatformError::into_public)
+            .map_err(|error| error.to_string())?;
+        // 只在切换成功后落盘：失败时用户仍停留在原模式，重启不会重复失败，
+        // 也不会出现"配置说 Passport、实际是 BLE"的错位。
+        if let Err(error) = settings.save_device_mode(mode) {
+            sayall_windows::gatt_note(format!(
+                "device_mode action=persist result=failed reason={error}"
+            ));
+            return Err(format!("设备模式已切换，但保存设置失败：{error}"));
+        }
+        Ok(platform.device_mode())
+    })
+    .await
+    .map_err(|error| format!("切换设备模式任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -5572,6 +5599,16 @@ pub fn run() {
             // 恢复使用）。该机制已按产品决策移除（会断开全部蓝牙设备），
             // 不再预热、不再请求无线电控制权限。
             let platform = create_platform();
+            // P2：按持久化配置恢复设备模式。Passport 启动失败时保持 BLE 模式，
+            // 失败原因写进 `device_mode_error`（连接页可见），不静默假装已切换。
+            if saved_settings.device_mode != DeviceMode::Ble {
+                if let Err(error) = platform.switch_device_mode(saved_settings.device_mode) {
+                    sayall_windows::gatt_note(format!(
+                        "device_mode action=startup mode=passport result=failed reason={error}"
+                    ));
+                    eprintln!("按保存的设置启动 Passport 模式失败：{error}");
+                }
+            }
             // 个人中心统计：平台层只排队，应用层每秒批量落盘；启动即开始消费，
             // 用户即使从不打开个人中心，按键与语音统计也会保留。
             // 旧版把统计写在 settings.json，首次启动迁移到独立文件后不再写回。
@@ -5711,12 +5748,14 @@ pub fn run() {
             }
 
             #[cfg(windows)]
-            if let Some(device_id) = saved_settings.selected_remote_id {
-                if let Err(error) = platform.restore_remote(device_id) {
-                    eprintln!(
-                        "恢复已保存的小米语音遥控器失败：{}",
-                        error.into_public()
-                    );
+            if saved_settings.device_mode == DeviceMode::Ble {
+                if let Some(device_id) = saved_settings.selected_remote_id {
+                    if let Err(error) = platform.restore_remote(device_id) {
+                        eprintln!(
+                            "恢复已保存的小米语音遥控器失败：{}",
+                            error.into_public()
+                        );
+                    }
                 }
             }
 
@@ -6035,6 +6074,7 @@ pub fn run() {
         get_connection_snapshot,
         connect_remote,
         disconnect_remote,
+        set_device_mode,
         list_audio_endpoints,
         get_audio_snapshot,
         select_audio_endpoint,
@@ -6172,6 +6212,7 @@ pub fn run() {
         get_connection_snapshot,
         connect_remote,
         disconnect_remote,
+        set_device_mode,
         list_audio_endpoints,
         get_audio_snapshot,
         select_audio_endpoint,

@@ -292,6 +292,9 @@ mod tests {
                 last_error: Some("内部注入细节".to_owned()),
                 last_focus: None,
             },
+            device_mode: sayall_core::DeviceMode::Ble,
+            passport: Default::default(),
+            device_mode_error: None,
         };
         let send_input = SendInputSnapshot {
             available: true,

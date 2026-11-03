@@ -598,6 +598,27 @@ html[data-theme="dark"] .member-badge { background: rgba(244, 114, 182, 0.2); co
   align-items: stretch;
 }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+/* 设备模式选择（P2）：与 chip 同排，但承载两行说明文字。 */
+.mode-choice {
+  flex: 1 1 240px;
+  display: grid;
+  gap: 3px;
+  min-height: 54px;
+  padding: 9px 13px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-control);
+  color: var(--text-control);
+  cursor: pointer;
+}
+.mode-choice strong { font-size: 13.5px; }
+.mode-choice small { color: var(--muted); font-size: 12px; }
+.mode-choice[aria-checked="true"] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.mode-choice:disabled { cursor: default; opacity: 0.6; }
 .setup-card { margin-top: 14px; }
 .setup-card > .card-title-row p { margin: 3px 0 0; font-size: 13px; }
 .setup-columns {

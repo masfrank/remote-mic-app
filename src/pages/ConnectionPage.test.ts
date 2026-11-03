@@ -5,6 +5,7 @@ import type {
   AudioSnapshot,
   CaptureSupport,
   ConnectionSnapshot,
+  PassportSnapshot,
   Rc003BridgeSnapshot,
   RuntimeSnapshot,
 } from "../lib/bridge";
@@ -129,10 +130,41 @@ const unsupportedCaptureSupport = (): CaptureSupport => ({
   reason: "arch_unsupported",
 });
 
+/** Passport 模式下的运行时快照；未覆盖的字段沿用 BLE 基线。 */
+function passportRuntime(
+  overrides: Partial<PassportSnapshot> = {},
+  deviceModeError: string | null = null,
+): RuntimeSnapshot {
+  return {
+    ...runtime,
+    platform: {
+      ...runtime.platform,
+      deviceMode: "passport",
+      passport: {
+        phase: "listening",
+        device: null,
+        port: 33333,
+        blocks: 0,
+        samples: 0,
+        lostBlocks: 0,
+        outOfOrder: 0,
+        badPackets: 0,
+        sessions: 0,
+        audioQueueDrops: 0,
+        generation: 0,
+        lastError: null,
+        ...overrides,
+      },
+      deviceModeError,
+    },
+  };
+}
+
 const mocks = vi.hoisted(() => ({
   endpoints: [] as AudioEndpoint[],
   captureEdgeHandler: null as ShortcutCaptureHandler | null,
   getConnectionSnapshot: vi.fn(),
+  setDeviceMode: vi.fn(),
   getAudioSnapshot: vi.fn(),
   listAudioEndpoints: vi.fn(),
   selectAudioEndpoint: vi.fn(),
@@ -163,6 +195,7 @@ vi.mock("../lib/bridge", async (importOriginal) => {
   return {
     ...original,
     getConnectionSnapshot: mocks.getConnectionSnapshot,
+    setDeviceMode: mocks.setDeviceMode,
     getAudioSnapshot: mocks.getAudioSnapshot,
     listAudioEndpoints: mocks.listAudioEndpoints,
     selectAudioEndpoint: mocks.selectAudioEndpoint,
@@ -202,6 +235,7 @@ describe("VB-CABLE first-launch guidance", () => {
       selectedEndpointId: endpointId,
       selectedEndpointName: cableEndpoint.name,
     }));
+    mocks.setDeviceMode.mockResolvedValue("passport");
     mocks.getGainDb.mockResolvedValue(0);
     mocks.setGainDb.mockImplementation(async (gainDb: number) => gainDb);
     mocks.openVbCableDownloadPage.mockResolvedValue(undefined);
@@ -1775,6 +1809,80 @@ describe("connection page interface language", () => {
     expect(summary).not.toMatch(/[\u4e00-\u9fff]/);
     // 整页在英文模式下不得残留中文（设备名、型号等数据本身是英文/数字）。
     expect(wrapper.text()).not.toMatch(/[\u4e00-\u9fff]/);
+    wrapper.unmount();
+  });
+
+  it("offers both device modes with Bluetooth selected by default", async () => {
+    const wrapper = mount(ConnectionPage, { props: { runtime } });
+    await flushPromises();
+
+    const choices = wrapper.findAll(".mode-choice");
+    expect(choices).toHaveLength(2);
+    expect(choices[0].attributes("aria-checked")).toBe("true");
+    expect(choices[0].text()).toContain("蓝牙设备");
+    expect(choices[1].attributes("aria-checked")).toBe("false");
+    expect(choices[1].text()).toContain("FoloToy AI Passport");
+    // BLE 模式下不出现 Passport 状态与会话统计。
+    expect(wrapper.text()).not.toContain("尚未发现设备");
+    wrapper.unmount();
+  });
+
+  it("shows the Passport link state and hides Bluetooth connection actions", async () => {
+    const wrapper = mount(ConnectionPage, {
+      props: {
+        runtime: passportRuntime({
+          phase: "device_linked",
+          device: "192.168.110.79:33333",
+        }),
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("设备已连接");
+    expect(wrapper.text()).toContain("192.168.110.79:33333");
+    expect(wrapper.text()).not.toContain("遥控器连接");
+    expect(wrapper.findAll(".mode-choice")[1].attributes("aria-checked")).toBe(
+      "true",
+    );
+    wrapper.unmount();
+  });
+
+  it("does not claim Passport is connected before the device answers", async () => {
+    const wrapper = mount(ConnectionPage, {
+      props: { runtime: passportRuntime() },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("尚未发现设备");
+    expect(wrapper.text()).not.toContain("设备已连接");
+    wrapper.unmount();
+  });
+
+  it("disables both mode choices while switching and surfaces failures", async () => {
+    let rejectSwitch: ((error: Error) => void) | undefined;
+    mocks.setDeviceMode.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSwitch = reject;
+        }),
+    );
+    const wrapper = mount(ConnectionPage, { props: { runtime } });
+    await flushPromises();
+
+    const choices = wrapper.findAll(".mode-choice");
+    await choices[1].trigger("click");
+    await flushPromises();
+
+    expect(mocks.setDeviceMode).toHaveBeenCalledWith("passport");
+    expect(choices[0].attributes("disabled")).toBeDefined();
+    expect(choices[1].attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).toContain("切换中");
+
+    rejectSwitch?.(new Error("绑定 UDP 33333 失败"));
+    await flushPromises();
+    // 端口占用要给出可理解的原因，而不是通用"操作没有完成"。
+    expect(wrapper.text()).toContain("Passport 端口 33333 被占用");
+    expect(choices[0].attributes("disabled")).toBeUndefined();
     wrapper.unmount();
   });
 });

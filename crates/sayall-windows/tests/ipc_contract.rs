@@ -77,6 +77,9 @@ fn rust_serialization_matches_the_shared_windows_runtime_contract() {
                 last_error: None,
                 last_focus: None,
             },
+            device_mode: sayall_core::DeviceMode::Ble,
+            passport: Default::default(),
+            device_mode_error: None,
         },
         "pairedRemotes": [
             PairedRemote {

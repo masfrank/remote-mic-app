@@ -1,8 +1,8 @@
 use sayall_core::{
     export_portable_library, import_portable_library, merge_library, normalize_gain_db,
-    validate_library, AppIconIdentifier, AppLanguage, AppSettings, MacroLibraryDocument,
-    ThemePreference, UsageStatistics, VoiceInputTool, MACRO_LIBRARY_FORMAT_VERSION,
-    PORTABLE_MAX_BYTES,
+    validate_library, AppIconIdentifier, AppLanguage, AppSettings, DeviceMode,
+    MacroLibraryDocument, ThemePreference, UsageStatistics, VoiceInputTool,
+    MACRO_LIBRARY_FORMAT_VERSION, PORTABLE_MAX_BYTES,
 };
 use sayall_windows::send_input::{
     ButtonMappings, KeyChord, KeyCode, BUTTON_MAPPINGS_SCHEMA_VERSION,
@@ -50,6 +50,12 @@ impl SettingsStore {
             Err(error) => return Err(format!("读取应用设置失败：{error}")),
         };
         parse_settings(&contents)
+    }
+
+    pub fn save_device_mode(&self, mode: DeviceMode) -> Result<(), String> {
+        self.update("保存设备模式设置", move |settings| {
+            settings.device_mode = mode;
+        })
     }
 
     pub fn save_audio_endpoint(
@@ -842,6 +848,33 @@ fn combined_actions_format_version(contents: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_mode_is_persisted_and_legacy_configs_fall_back_to_ble() {
+        let path = std::env::temp_dir().join(format!(
+            "sayall-device-mode-{}.json",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        let store = SettingsStore::new(path.clone());
+
+        assert_eq!(store.load().unwrap().device_mode, DeviceMode::Ble);
+        store.save_device_mode(DeviceMode::Passport).unwrap();
+        // 重新读取（模拟重启）必须恢复 Passport。
+        assert_eq!(store.load().unwrap().device_mode, DeviceMode::Passport);
+
+        // 旧版本配置没有该字段：读出来回退 BLE，且不报错。
+        fs::write(
+            &path,
+            r#"{"schema_version":7,"gain_db":0.0,"voice_trigger_mode":"hold"}"#,
+        )
+        .unwrap();
+        let legacy = store.load().unwrap();
+        assert_eq!(legacy.device_mode, DeviceMode::Ble);
+        assert_eq!(legacy.schema_version, 8);
+
+        let _ = fs::remove_file(&path);
+    }
 
     #[test]
     fn other_voice_hotkey_memory_distinguishes_never_chosen_from_no_key() {

@@ -190,4 +190,33 @@ export default {
     "If Vokie, WeType, or Doubao has no separate microphone option, set the system default recording device to CABLE Output.",
   "Vokie 和豆包用的是同一个快捷键（右 Alt），同一时间只会有一个在响应：Vokie 要在运行中，豆包要是当前输入法；两个同时开着时 Vokie 会抢先。":
     "Vokie and Doubao use the same shortcut (Right Alt), so only one responds at a time: Vokie must be running and Doubao must be the current input tool. If both are open, Vokie takes priority.",
+
+  // 设备模式（BLE / FoloToy AI Passport）
+  "设备模式": "Device mode",
+  "同一时间只使用一种设备；切换会先停止当前设备。":
+    "Only one device is active at a time; switching stops the current one first.",
+  "切换中…": "Switching…",
+  "蓝牙设备": "Bluetooth remote",
+  "通过蓝牙连接 RC001 / RC003 遥控器":
+    "Connect an RC001 / RC003 remote over Bluetooth",
+  "通过 Wi-Fi 接收 Passport 的语音": "Receive Passport voice over Wi-Fi",
+  "等待设备": "Waiting for device",
+  "设备已连接": "Device connected",
+  "正在接收语音": "Receiving voice",
+  "未启动": "Not started",
+  "异常": "Error",
+  "设备地址": "Device address",
+  "尚未发现设备": "No device found yet",
+  "会话数": "Sessions",
+  "已接收音频": "Audio received",
+  "秒": "s",
+  "丢块": "Lost blocks",
+  "请让 AI Passport 停留在「AI 语音」界面；只有该界面才会开启 Wi-Fi 语音通道。":
+    "Keep AI Passport on its “AI Voice” screen; only that screen opens the Wi-Fi voice channel.",
+  "设备模式切换失败，请稍后重试。":
+    "Could not switch device mode. Try again later.",
+  "Passport 端口 33333 被占用，请关闭其他 Passport 程序后重试。":
+    "Port 33333 is already in use. Close the other Passport program and try again.",
+  "Passport 通道出错，请重试或查看诊断日志。":
+    "The Passport channel reported an error. Try again or check the diagnostic log.",
 } as Record<string, string>;

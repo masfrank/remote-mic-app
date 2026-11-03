@@ -25,8 +25,10 @@ import type {
   AudioSnapshot,
   CaptureSupport,
   ConnectionSnapshot,
+  DeviceMode,
   KeyChord,
   PairedRemote,
+  PassportSnapshot,
   Rc003CaptureHealth,
   Rc003CaptureRevoked,
   Rc003CaptureUnavailable,
@@ -60,6 +62,7 @@ import {
   remoteModelLabel,
   scanPairedRemotes,
   selectAudioEndpoint,
+  setDeviceMode,
   setGainDb,
   setOtherVoiceHotkey,
   setVoiceHoldHotkey,
@@ -116,6 +119,85 @@ const disconnecting = ref(false);
 const devices = ref<PairedRemote[]>([]);
 const scanMessage = ref("");
 const operationMessage = ref("");
+
+// ---- 设备模式（P2）：BLE 与 Passport 互斥，切换由后端协调 ----
+const switchingMode = ref(false);
+const modeActionError = ref<string | null>(null);
+
+const deviceMode = computed<DeviceMode>(
+  () => props.runtime?.platform.deviceMode ?? "ble",
+);
+const passport = computed<PassportSnapshot | null>(
+  () => props.runtime?.platform.passport ?? null,
+);
+const passportActive = computed(() => deviceMode.value === "passport");
+/** 后端保留的"上次切换失败"原因：启动时切换失败也能在这里看见。 */
+/** 后端错误原文只进控制台；界面按可识别的原因给一句可读文案。 */
+function modeErrorText(raw: string | null): string | null {
+  if (!raw) return null;
+  if (raw.includes("33333")) {
+    return t("Passport 端口 33333 被占用，请关闭其他 Passport 程序后重试。");
+  }
+  return t("设备模式切换失败，请稍后重试。");
+}
+
+const modeNotice = computed(
+  () =>
+    modeActionError.value ??
+    modeErrorText(props.runtime?.platform.deviceModeError ?? null),
+);
+
+const passportPhaseText = computed(() => {
+  switch (passport.value?.phase ?? "stopped") {
+    case "listening":
+      return t("等待设备");
+    case "device_linked":
+      return t("设备已连接");
+    case "streaming":
+      return t("正在接收语音");
+    case "error":
+      return t("异常");
+    default:
+      return t("未启动");
+  }
+});
+
+const passportPhaseTone = computed(() => {
+  switch (passport.value?.phase ?? "stopped") {
+    case "streaming":
+      return "active";
+    case "device_linked":
+      return "success";
+    case "listening":
+      return "warning";
+    case "error":
+      return "error";
+    default:
+      return "pending";
+  }
+});
+
+const passportAudioSeconds = computed(() =>
+  Math.floor((passport.value?.samples ?? 0) / 16_000),
+);
+
+async function chooseDeviceMode(mode: DeviceMode) {
+  if (switchingMode.value || mode === deviceMode.value) return;
+  switchingMode.value = true;
+  modeActionError.value = null;
+  try {
+    await setDeviceMode(mode);
+    // 切换成功后立刻刷新一次，避免最坏情况等满一个轮询周期。
+    await refreshConnection();
+  } catch (error) {
+    console.error("[connection] set_device_mode", error);
+    modeActionError.value = modeErrorText(
+      error instanceof Error ? error.message : String(error),
+    );
+  } finally {
+    switchingMode.value = false;
+  }
+}
 const audioEndpoints = ref<AudioEndpoint[]>([]);
 const showEndpointList = ref(false);
 const scanningAudio = ref(false);
@@ -1202,9 +1284,81 @@ onUnmounted(() => {
       <span class="badge" :class="phaseTone">{{ connectionPhaseLabel(connection.phase) }}</span>
     </header>
 
+    <!-- ============ 设备模式（P2）：蓝牙遥控器 / FoloToy AI Passport ============ -->
+    <article class="card">
+      <div class="card-title-row">
+        <div>
+          <h2>{{ t("设备模式") }}</h2>
+          <small>{{ t("同一时间只使用一种设备；切换会先停止当前设备。") }}</small>
+        </div>
+        <span v-if="switchingMode" class="badge warning">{{ t("切换中…") }}</span>
+      </div>
+
+      <div class="chip-row" role="radiogroup" :aria-label="t('设备模式')">
+        <button
+          class="mode-choice"
+          type="button"
+          role="radio"
+          :aria-checked="deviceMode === 'ble'"
+          :disabled="switchingMode"
+          @click="chooseDeviceMode('ble')"
+        >
+          <strong>{{ t("蓝牙设备") }}</strong>
+          <small>{{ t("通过蓝牙连接 RC001 / RC003 遥控器") }}</small>
+        </button>
+        <button
+          class="mode-choice"
+          type="button"
+          role="radio"
+          :aria-checked="deviceMode === 'passport'"
+          :disabled="switchingMode"
+          @click="chooseDeviceMode('passport')"
+        >
+          <strong>FoloToy AI Passport</strong>
+          <small>{{ t("通过 Wi-Fi 接收 Passport 的语音") }}</small>
+        </button>
+      </div>
+
+      <p v-if="modeNotice" class="error-text">{{ modeNotice }}</p>
+
+      <template v-if="passportActive">
+        <div class="status-panel" aria-live="polite">
+          <div class="status-copy">
+            <div class="status-heading">
+              <span class="status-dot" :class="passportPhaseTone"></span>
+              <strong>{{ passportPhaseText }}</strong>
+            </div>
+            <small v-if="passport?.device">
+              {{ t("设备地址") }}: {{ passport.device }}
+            </small>
+            <small v-else>{{ t("尚未发现设备") }}</small>
+          </div>
+        </div>
+
+        <div class="chip-row">
+          <span class="device-chip">
+            {{ t("会话数") }}: {{ passport?.sessions ?? 0 }}
+          </span>
+          <span class="device-chip">
+            {{ t("已接收音频") }}: {{ passportAudioSeconds }} {{ t("秒") }}
+          </span>
+          <span class="device-chip">
+            {{ t("丢块") }}: {{ passport?.lostBlocks ?? 0 }}
+          </span>
+        </div>
+
+        <p v-if="passport?.lastError" class="error-text">
+          {{ t("Passport 通道出错，请重试或查看诊断日志。") }}
+        </p>
+        <p class="operation-message">
+          {{ t("请让 AI Passport 停留在「AI 语音」界面；只有该界面才会开启 Wi-Fi 语音通道。") }}
+        </p>
+      </template>
+    </article>
+
     <!-- ============ 设备：遥控器 + 语音设备 ============ -->
     <div class="device-row">
-      <article class="card">
+      <article v-if="!passportActive" class="card">
         <div class="card-title-row">
           <div>
             <h2>{{ t("遥控器连接") }}</h2>
