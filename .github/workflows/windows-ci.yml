@@ -42,7 +42,9 @@ jobs:
   # verify 无条件运行完整校验。
   verify:
     runs-on: windows-latest
-    timeout-minutes: 30
+    # 2026-11-03：冷缓存下完整链路实测约 33 分钟（Rust 全量重编 + runtime-simulation
+    # 构建），30 分钟会在最后一步被 GitHub 取消；45 分钟留出余量。
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
