@@ -851,10 +851,8 @@ mod tests {
 
     #[test]
     fn device_mode_is_persisted_and_legacy_configs_fall_back_to_ble() {
-        let path = std::env::temp_dir().join(format!(
-            "sayall-device-mode-{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("sayall-device-mode-{}.json", std::process::id()));
         let _ = fs::remove_file(&path);
         let store = SettingsStore::new(path.clone());
 
