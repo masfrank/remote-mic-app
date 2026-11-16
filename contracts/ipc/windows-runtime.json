@@ -47,7 +47,9 @@
       "semanticEdgeCount": 8,
       "lastButton": "home",
       "lastIsPressed": true,
-      "activeButtons": ["home"],
+      "activeButtons": [
+        "home"
+      ],
       "lastError": null,
       "staleRemoteEventCount": 0
     },
@@ -63,7 +65,23 @@
         "trigger": "single"
       },
       "lastError": null
-    }
+    },
+    "deviceMode": "ble",
+    "passport": {
+      "phase": "stopped",
+      "device": null,
+      "port": 0,
+      "blocks": 0,
+      "samples": 0,
+      "lostBlocks": 0,
+      "outOfOrder": 0,
+      "badPackets": 0,
+      "sessions": 0,
+      "audioQueueDrops": 0,
+      "generation": 0,
+      "lastError": null
+    },
+    "deviceModeError": null
   },
   "pairedRemotes": [
     {

@@ -32,6 +32,9 @@ permissions:
 # Secret 未配置（PR/fork）时由 ensure-updater-signing-key.ps1 生成一次性临时密钥兜底。
 env:
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  # 2026-11-03：密钥带密码时必须同时提供，否则 tauri 报 "Wrong password for that key"；
+  # 兜底脚本只在生成临时密钥时导出密码，已有 Secret 时不会补。
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
 concurrency:
   group: windows-ci-${{ github.event.pull_request.number || github.ref }}
@@ -42,7 +45,9 @@ jobs:
   # verify 无条件运行完整校验。
   verify:
     runs-on: windows-latest
-    timeout-minutes: 30
+    # 2026-11-03：冷缓存下完整链路实测约 33 分钟（Rust 全量重编 + runtime-simulation
+    # 构建），30 分钟会在最后一步被 GitHub 取消；45 分钟留出余量。
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
