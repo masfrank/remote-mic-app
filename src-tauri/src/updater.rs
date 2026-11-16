@@ -25,10 +25,9 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const PROGRESS_EMIT_MIN_INTERVAL_BYTES: u64 = 128 * 1024;
 const ENDPOINT_OVERRIDE_ENV: &str = "SAYALL_UPDATER_ENDPOINT";
-const PREVIEW_RELEASES_FEED: &str =
-    "https://github.com/GetSayAll/remote-mic-app-windows/releases.atom";
+const PREVIEW_RELEASES_FEED: &str = "https://github.com/masfrank/remote-mic-app/releases.atom";
 const PREVIEW_MANIFEST_NAME: &str = "latest.json";
-const RELEASE_DOWNLOAD_PATH_PREFIX: &str = "/GetSayAll/remote-mic-app-windows/releases/download/";
+const RELEASE_DOWNLOAD_PATH_PREFIX: &str = "/masfrank/remote-mic-app/releases/download/";
 /// 前端进度事件名（downloaded/contentLength/finished）。
 const PROGRESS_EVENT: &str = "app-update-progress";
 
@@ -156,9 +155,8 @@ fn preview_manifest_endpoint(
                 .find(|link| link.rel == "alternate")?
                 .href
                 .trim_end_matches('/');
-            let tag = href.strip_prefix(
-                "https://github.com/GetSayAll/remote-mic-app-windows/releases/tag/",
-            )?;
+            let tag =
+                href.strip_prefix("https://github.com/masfrank/remote-mic-app/releases/tag/")?;
             semver::Version::parse(tag.trim_start_matches('v'))
                 .ok()
                 .map(|version| (tag.to_owned(), version))
@@ -168,7 +166,7 @@ fn preview_manifest_endpoint(
         return Ok(None);
     };
     let url = format!(
-        "https://github.com/GetSayAll/remote-mic-app-windows/releases/download/{tag}/{PREVIEW_MANIFEST_NAME}"
+        "https://github.com/masfrank/remote-mic-app/releases/download/{tag}/{PREVIEW_MANIFEST_NAME}"
     )
     .parse::<reqwest::Url>()
     .map_err(|_| PreviewManifestError::InvalidReleaseUrl)?;
@@ -547,7 +545,7 @@ mod tests {
                     links: vec![ReleaseFeedLink {
                         rel: "alternate".to_owned(),
                         href: format!(
-                            "https://github.com/GetSayAll/remote-mic-app-windows/releases/tag/{tag}"
+                            "https://github.com/masfrank/remote-mic-app/releases/tag/{tag}"
                         ),
                     }],
                 })
@@ -562,7 +560,7 @@ mod tests {
         assert_eq!(tag, "v0.2.2");
         assert_eq!(
             endpoint.as_str(),
-            "https://github.com/GetSayAll/remote-mic-app-windows/releases/download/v0.2.2/latest.json"
+            "https://github.com/masfrank/remote-mic-app/releases/download/v0.2.2/latest.json"
         );
     }
 
@@ -577,8 +575,9 @@ mod tests {
                     },
                     ReleaseFeedLink {
                         rel: "self".to_owned(),
-                        href: "https://github.com/GetSayAll/remote-mic-app-windows/releases/tag/not-a-version"
-                            .to_owned(),
+                        href:
+                            "https://github.com/masfrank/remote-mic-app/releases/tag/not-a-version"
+                                .to_owned(),
                     },
                 ],
             }],
