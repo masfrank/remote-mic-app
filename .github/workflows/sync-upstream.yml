@@ -1,0 +1,95 @@
+# 将 masfrank/remote-mic-app 的 main 跟踪
+# GetSayAll/remote-mic-app-windows 的 main。
+# 本仓库不是 GitHub fork，不能用 gh repo sync / merge-upstream。
+# 只同步 main，不推送 tag，避免误触发 windows-release.yml。
+name: Sync upstream
+
+on:
+  schedule:
+    # 每天 00:00 中国时间（16:00 UTC）
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Merge GetSayAll/remote-mic-app-windows main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream https://github.com/GetSayAll/remote-mic-app-windows.git
+          else
+            git remote add upstream https://github.com/GetSayAll/remote-mic-app-windows.git
+          fi
+
+          git fetch --no-tags origin main
+          git fetch --no-tags upstream main
+
+          local_sha=$(git rev-parse origin/main)
+          upstream_sha=$(git rev-parse upstream/main)
+          echo "origin/main=${local_sha}"
+          echo "upstream/main=${upstream_sha}"
+
+          if [ "${local_sha}" = "${upstream_sha}" ]; then
+            echo "Already up to date with upstream/main"
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor "${upstream_sha}" "${local_sha}"; then
+            echo "origin/main already contains upstream/main"
+            exit 0
+          fi
+
+          git checkout --force -B main origin/main
+          mkdir -p /tmp/sayall-sync
+          cp .github/workflows/sync-upstream.yml /tmp/sayall-sync/sync-upstream.yml
+
+          if ! git merge --no-edit upstream/main; then
+            unresolved=$(git diff --name-only --diff-filter=U || true)
+            if echo "${unresolved}" | grep -qx '.github/workflows/sync-upstream.yml'; then
+              git checkout --ours -- .github/workflows/sync-upstream.yml
+              git add .github/workflows/sync-upstream.yml
+            fi
+            still_unresolved=$(git diff --name-only --diff-filter=U || true)
+            if [ -n "${still_unresolved}" ]; then
+              echo "Unresolved merge conflicts:"
+              echo "${still_unresolved}"
+              exit 1
+            fi
+            git commit --no-edit
+          fi
+
+          if [ ! -f .github/workflows/sync-upstream.yml ]; then
+            mkdir -p .github/workflows
+            cp /tmp/sayall-sync/sync-upstream.yml .github/workflows/sync-upstream.yml
+            git add .github/workflows/sync-upstream.yml
+            git commit -m "ci: restore upstream sync workflow after fast-forward"
+          fi
+
+          git push origin main
+
+          echo "Synced origin/main to $(git rev-parse HEAD) (upstream ${upstream_sha})"
+
+          # GITHUB_TOKEN 的 push 不会触发其他 workflow；用 workflow_dispatch 补跑 Windows CI。
+          gh workflow run "Windows CI" --ref main
