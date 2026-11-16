@@ -1,4 +1,16 @@
 # TODO
+## 当前进度（2026-11-03）
+
+- P0：完成（协议探针，真机 bit-exact）
+- P1：完成（Passport UDP Runtime）
+- P2：完成（双设备模式 + 完整真机验收 + VB-CABLE 电平验证）
+- P3.1：完成（IME 首按观测，20/20 passed；暂不增加自动恢复）
+- P3.2：暂缓（等待真实异常样本）
+- 短按动作专项验收：按需执行
+
+后续（按需）：把 Passport 三个实体键接入按键映射——上键按住说话已支持；
+下键=回车、长按确定键=退出语音输入，需要先确认固件是否为后两者发送事件。
+
 
 ## 语音识别"能出字但对不上"的定位链（2026-10-27 用户报障，已定位为配置问题）
 
@@ -519,3 +531,37 @@
   - 体积实测：治理前约 107 MB/天（存量 768 MB）→ 治理后健康态约 **3 MB/天**（主程序心跳行 406 B、助手 `[HB]` 行 618 B）；10 MB/文件 ⇒ 约 3 天一换、保留 5 份 ≈ 50 MB 封顶。
   - 自验：应用新增 5 例单测、助手新增 3 例单测；`cargo test --workspace` 全绿（312 + 106 + …）、助手 `--selftest` 通过、`cargo fmt --check` 干净。**真机活体**：助手侧轮转已实测生效——769 MB 旧文件被改名成带时间戳的旧文件、当前文件新建为 KB 级（证据见 [Bugs/2026-10-08-rc003-stale-tap-self-heal.md](Bugs/2026-10-08-rc003-stale-tap-self-heal.md) 同批记录）；主程序侧随本轮本地包安装后核对"两个写入方仍落在同一个当前文件"。
   - 历史大文件：那次 769 MB 旧文件在轮转后人工回收（走回收站）；此后由「10 MB/文件 + 保留 5 份」自然收敛。
+
+## FoloToy AI Passport 双设备模式（P2，2026-11-03）
+
+- [x] 正式 `DeviceMode`（`ble` 默认 / `passport`）与配置代次 8；旧配置缺字段、非法值均安全回退 `ble`。
+- [x] `WindowsPlatform::switch_device_mode`：两种 Runtime 互斥、先停当前再起目标；启动失败保持原模式，
+      原因写入 `PlatformSnapshot.deviceModeError`，界面不得显示 Passport 已连接。
+- [x] Tauri 命令 `set_device_mode`（两套 handler 均已注册）；快照新增 `deviceMode` / `passport` / `deviceModeError`。
+- [x] 连接页「设备模式」选择、切换中禁点、Passport 状态/设备地址/会话统计/未发现设备提示。
+- [x] 自动化：`cargo test -p sayall-core` 102、`--lib` 492、Passport UDP 6、device_mode 4、IPC 契约 1、配置持久化 1，全部通过。
+- [x] 前端验收（2026-11-03）：`pnpm install --frozen-lockfile`、`pnpm test`（36 文件 / 567 通过）、
+      `pnpm build`（`vue-tsc --noEmit` + `vite build`）全部通过。
+- [x] 真机（Passport 入口）：`switch_device_mode(Passport)` 启动 → 发现 `192.168.110.79` →
+      按住说话 `sessions=1`、`blocks=1`、`samples=1600`、`generation=1`，0 丢块/0 乱序。
+- [x] 真机（回切 BLE，2026-11-03）：切回 BLE 后连接 RC003（`phase=Ready`），按住语音键
+      `decoded_samples 0 → 480`，断开正常；Passport 与 BLE 互斥无卡键。
+- [x] 真机（Passport 体验）：连续会话 `generation=2`、`voice.end` 后离开 `Streaming`、
+      12 秒断链回 `Listening`、回到界面后重新发现。
+- [x] VB-CABLE 出声（2026-11-03，客观测量）：Passport 会话 `blocks=15`、`samples=24000` 期间，
+      `CABLE Output` 采集到 147969 帧、峰值 **-6.2 dBFS**（阈值 -60 dBFS）；PCM 确实到达虚拟声卡。
+- [ ] 完整应用构建：仍需 `src-tauri/sayall-helper.exe` 与 `frida-gadget.dll`（不入库的构建产物）。
+
+## P3.1 Passport IME 首按观测（2026-11-03，只观测不恢复）
+
+- [x] `crates/sayall-windows/src/passport/ime_probe.rs`：press 前记录 marker 基线；
+      800ms / 1500ms 两次观测；generation 过期即丢弃；release 记录最终状态。
+- [x] 判据全部复用 BLE：`ime::mic_marker_for`、`wetype_revive::mic_observation_for` /
+      `response_since`、`key_suppressor::wetype_marker_count`、`reaction_verdict`。
+- [x] 自动化：ime_probe 6 条单测；`cargo test -p sayall-windows --lib` 498 通过、
+      core 102、Passport UDP 6、device_mode 4。
+- [x] 真机 20 次（微信输入法，快捷键 Ctrl+Win）：**passed 20/20**（10 次正常 + 10 次先切走输入法），
+      800ms 即 `mic=observed / reaction=reacted`；无 delayed / unconfirmed / failed。
+- [x] 采集脚本教训：第一轮 20 次全 `not_observed`，根因是脚本把按住说话键写成右 Shift；
+      微信输入法必须由用户配置的 Ctrl+Win 触发。脚本已改为读 `voice-hold-hotkey.json`。
+- [ ] 结论：没有失败样本，**暂不进入 P3.2 自动恢复**；保留观测继续积累异常样本。

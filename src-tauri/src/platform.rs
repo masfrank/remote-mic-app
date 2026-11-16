@@ -17,6 +17,18 @@ pub trait PlatformRuntime: Debug + Send + Sync {
     fn connection_snapshot(&self) -> ConnectionSnapshot;
     fn connect_remote(&self, device_id: String) -> Result<ConnectionSnapshot, PlatformError>;
     fn disconnect_remote(&self) -> Result<ConnectionSnapshot, PlatformError>;
+    /// 当前设备模式；不支持双模式的平台默认 BLE。
+    fn device_mode(&self) -> sayall_core::DeviceMode {
+        sayall_core::DeviceMode::Ble
+    }
+    /// 切换设备模式；默认只接受 BLE（仿真/非 Windows 主机没有 Passport 通道）。
+    fn switch_device_mode(&self, mode: sayall_core::DeviceMode) -> Result<(), PlatformError> {
+        if mode == sayall_core::DeviceMode::Ble {
+            Ok(())
+        } else {
+            Err(PlatformError::UnsupportedPlatform)
+        }
+    }
     #[cfg(windows)]
     fn restore_remote(&self, device_id: String) -> Result<ConnectionSnapshot, PlatformError>;
     fn list_audio_endpoints(&self) -> Result<Vec<AudioEndpoint>, PlatformError>;
@@ -213,6 +225,15 @@ impl PlatformRuntime for WindowsPlatform {
 
     fn disconnect_remote(&self) -> Result<ConnectionSnapshot, PlatformError> {
         self.disconnect_remote()
+    }
+
+    fn device_mode(&self) -> sayall_core::DeviceMode {
+        WindowsPlatform::device_mode(self)
+    }
+
+    fn switch_device_mode(&self, mode: sayall_core::DeviceMode) -> Result<(), PlatformError> {
+        // 显式走 inherent 方法，避免递归。
+        WindowsPlatform::switch_device_mode(self, mode)
     }
 
     #[cfg(windows)]
@@ -453,9 +474,16 @@ impl PlatformRuntime for WindowsPlatform {
     }
 
     fn shutdown_for_exit(&self, timeout: std::time::Duration) -> Result<(), PlatformError> {
-        // 先释放应用切换器会话的 Alt（进程结束前必须同步完成），再收尾 BLE。
+        // 退出走 `process::exit`，析构不会执行，所以必须在这里显式停。
+        // 先停 Passport：释放按住键、中断音频会话并 join 线程。
+        #[cfg(windows)]
+        let passport = self.stop_passport();
+        #[cfg(not(windows))]
+        let passport = Ok(());
+        // 再释放应用切换器会话的 Alt（进程结束前必须同步完成），最后收尾 BLE。
         let _ = self.release_app_switcher_for_exit(std::time::Duration::from_millis(800));
-        self.shutdown_ble_for_exit(timeout)
+        let ble = self.shutdown_ble_for_exit(timeout);
+        passport.and(ble)
     }
 }
 
@@ -838,6 +866,9 @@ mod simulation {
                 audio: state.audio.clone(),
                 raw_input: state.raw_input.clone(),
                 button_mapping: self.button_mapping_snapshot(),
+                device_mode: sayall_core::DeviceMode::Ble,
+                passport: Default::default(),
+                device_mode_error: None,
             }
         }
 

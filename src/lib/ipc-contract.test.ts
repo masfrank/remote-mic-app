@@ -4,7 +4,9 @@ import type {
   AudioPhase,
   ButtonTrigger,
   ConnectionPhase,
+  DeviceMode,
   PairedRemote,
+  PassportPhase,
   PlatformSnapshot,
   RawInputPhase,
   RemoteButton,
@@ -65,6 +67,14 @@ const remoteButtons = [
   "volume_down",
 ] as const satisfies readonly RemoteButton[];
 const buttonTriggers = ["single", "double", "long"] as const satisfies readonly ButtonTrigger[];
+const deviceModes = ["ble", "passport"] as const satisfies readonly DeviceMode[];
+const passportPhases = [
+  "stopped",
+  "listening",
+  "device_linked",
+  "streaming",
+  "error",
+] as const satisfies readonly PassportPhase[];
 
 describe("Rust and TypeScript IPC contract", () => {
   it("loads the shared platform snapshot through the frontend types", () => {
@@ -110,6 +120,12 @@ describe("Rust and TypeScript IPC contract", () => {
                 ),
               },
       },
+      deviceMode: memberOf(fixture.deviceMode, deviceModes),
+      passport: {
+        ...fixture.passport,
+        phase: memberOf(fixture.passport.phase, passportPhases),
+      },
+      deviceModeError: fixture.deviceModeError,
     };
 
     expect(platformSnapshot).toEqual(fixture);
@@ -126,6 +142,9 @@ describe("Rust and TypeScript IPC contract", () => {
       "audio",
       "rawInput",
       "buttonMapping",
+      "deviceMode",
+      "passport",
+      "deviceModeError",
     ]);
     expectExactKeys(platformSnapshot.connection, [
       "phase",

@@ -38,6 +38,7 @@
 | 更新完成提示（启动时一次性） | 标题「无线麦已更新」、正文「已成功更新到版本 {版本号}。」、按钮「好」（对齐 Mac `update.completed.*`，原样移植）；只在“本次启动前刚完成更新”时出现一次 | `UpdateCompletedDialog.vue`、`launch_state.rs` |
 | 组合动作（侧边栏页 + 按键页动作分组） | 组合动作；步骤类型写「打开应用」「等待应用」「单键或快捷键」「聚焦输入框」「聚焦学习过的输入框」「打开网址」「执行已有组合动作」（对齐 Mac `macro.step.*`；「系统与媒体动作」不再作为新步骤提供，旧数据仍可显示与执行）；终态写「组合动作执行成功」「组合动作已执行，但无法确认第三方 App 的结果」「组合动作已取消」「组合动作执行超时」等（对齐 Mac `macro.status.execution.*`） | `MacrosPage.vue`、`ButtonsPage.vue`、`src/lib/bridge.ts`（`macroActionLabel` / `macroTerminalLabel` / `macroStepSummary`） |
 | 注册应用选择器（按键页 / 组合动作页 / 「聚焦与翻页」页面的「添加应用」弹窗） | 标题写「选择应用」；两个入口写「本机扫描」「程序选择」；确认按钮写「添加应用」；清空写「取消选择」；已加入应用库的条目显示「已添加」；单选锁定提示「已选择应用。要重新选择，请先取消下方已选择的应用。」。已选择区域只显示名称和来源，不显示路径；空态不显示路径说明；左下角不显示确认提示。一次只能选择一个应用 | `RegisteredAppsDialog.vue`、`src/lib/i18n/en/common.ts` |
+| 设备模式（连接页，2026-11-03） | 「设备模式」；两个选项写「蓝牙设备」「FoloToy AI Passport」（品牌名不翻译）；Passport 提示句“请让 AI Passport 停留在「AI 语音」界面；只有该界面才会开启 Wi-Fi 语音通道。”；切换中显示「切换中…」；Passport 状态写「未启动」「等待设备」「设备已连接」「正在接收语音」「异常」；找不到设备写「尚未发现设备」（不得写「已连接」） | `ConnectionPage.vue`、`PlatformSnapshot.deviceMode`、`AppSettings.device_mode` |
 
 `Remote Mic` 仅用于历史兼容标识、代码标识符与既有发布资产，不出现在新文案里。
 型号名只允许在 `remoteModelLabel` 定义一次，其他地方引用它（2026-10-01 教训：连接页
@@ -64,6 +65,7 @@
 | 遥控器语音键 | Voice Button | 遥控器上的语音键；相关句子用 voice button |
 | 按住说话快捷键（输入工具触发键） | Voice Trigger Key / voice shortcut | 对齐 Mac `connection.voice_key_mode.title` / `onboarding.voice_tool.*` |
 | 切换应用（按键动作） | Switch Apps | 对齐 Mac `shortcut.preset.app_switcher`；卡片显示 `Alt + Tab` |
+| 设备模式 | Device mode；选项 Bluetooth remote / FoloToy AI Passport | 连接页；品牌名不翻译 |
 | 单击 / 双击 | Single Press / Double Press | 遥控器按键触发方式；鼠标单击仍用 click |
 | 上一曲 / 下一曲 | Previous track / Next track | 对齐 Mac |
 | 小米蓝牙语音遥控器 2 / 2 Pro | Xiaomi Bluetooth Voice Remote 2 / 2 Pro | 包含「语音」与版本后缀 |
