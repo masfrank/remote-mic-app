@@ -456,150 +456,193 @@ impl MappingInjector for SendInputInjector {
         let strategy = profile
             .map(|profile| profile.strategy)
             .unwrap_or(crate::focus::FocusStrategy::OpenOnly);
-        match strategy {
-            crate::focus::FocusStrategy::OpenOnly => {
-                // 冷启动窗口常晚于 activate_or_launch 的内建 1.5 秒预算
-                // （2026-10-23 网易云音乐实测 4.2 秒）。按键方案要在下一按前
-                // 命中目标 App，这里再有界等一次；只等前台，不抢焦点。
-                //
-                // 2026-10-28 真机回归：无线麦自己在前台时，Windows 的前台锁
-                // 会让新窗口停在后面，单靠等待永远等不到；已运行应用的第二次
-                // activate_or_launch 会走「恢复已有窗口并置前」，与 AppShortcut
-                // 分支同一路径，能把目标真正拿到前台。
-                //
-                // 这段等待**不能**按「私有键位方案宿主是否可用」门控：公开构建
-                // 不注入私有宿主，门控会让冷启动首按完全跳过等待/重试。2026-11-12
-                // 飞书现场：菜单键冷启动 `launched_without_foreground` 后无任何
-                // `focus_wait_foreground`/重试日志，窗口停在后台。
-                // 等待与激活放到后台，避免最长 4 秒阻塞引擎线程；每次打开递增
-                // generation，旧任务在用户发起下一次打开后退出。
-                schedule_open_only_foreground(target);
-                Ok(())
-            }
-            crate::focus::FocusStrategy::AutoComposer => {
-                // 激活是异步完成的：先等目标成为前台，否则前几次尝试会打在旧前台
-                // 应用上（与「聚焦已记录的输入框」同一理由）。
-                let foreground = crate::app_launcher::wait_for_target_foreground(
-                    target,
-                    std::time::Duration::from_millis(2500),
-                );
-                if !foreground {
-                    // 打开本身已经成功。窗口迟迟没到前台时放弃自动聚焦，
-                    // 不把焦点抢到用户当前正在用的另一个应用上。
-                    return Ok(());
+        // 打开已经成功；聚焦只是附加步骤。任何聚焦配置缺失、前台等待失败或
+        // 快捷键/点击注入失败都不能再把打开判为失败（否则宿主不会记录
+        // target_opened，下一条按键仍落到旧应用）。这里统一兜底，具体策略
+        // 在内部记录更精确的日志。
+        let focus = (|| -> Result<(), String> {
+            match strategy {
+                crate::focus::FocusStrategy::OpenOnly => {
+                    // 冷启动窗口常晚于 activate_or_launch 的内建 1.5 秒预算
+                    // （2026-10-23 网易云音乐实测 4.2 秒）。按键方案要在下一按前
+                    // 命中目标 App，这里再有界等一次；只等前台，不抢焦点。
+                    //
+                    // 2026-10-28 真机回归：无线麦自己在前台时，Windows 的前台锁
+                    // 会让新窗口停在后面，单靠等待永远等不到；已运行应用的第二次
+                    // activate_or_launch 会走「恢复已有窗口并置前」，与 AppShortcut
+                    // 分支同一路径，能把目标真正拿到前台。
+                    //
+                    // 这段等待**不能**按「私有键位方案宿主是否可用」门控：公开构建
+                    // 不注入私有宿主，门控会让冷启动首按完全跳过等待/重试。2026-11-12
+                    // 飞书现场：菜单键冷启动 `launched_without_foreground` 后无任何
+                    // `focus_wait_foreground`/重试日志，窗口停在后台。
+                    // 等待与激活放到后台，避免最长 4 秒阻塞引擎线程；每次打开递增
+                    // generation，旧任务在用户发起下一次打开后退出。
+                    schedule_open_only_foreground(target);
+                    Ok(())
                 }
-                self.with_focus_runner(|runner| {
-                    runner.submit(crate::focus_service::FocusTask::LaunchThenFocus(
-                        crate::focus::FocusChoice::BestComposer,
-                    ))
-                })
-                .flatten()
-                .map(|_| ())
-                .ok_or_else(|| "聚焦服务不可用".to_owned())
-            }
-            crate::focus::FocusStrategy::AppShortcut => {
-                let chord = profile
-                    .and_then(|profile| profile.shortcut.clone())
-                    .ok_or_else(|| "该应用未录入聚焦快捷键".to_owned())?;
-                // 快捷键必须落在目标应用上：激活是异步的，先等目标成为前台，
-                // 否则 Ctrl+L / Ctrl+F 会发给用户当前正在用的另一个应用。
-                let mut foreground = crate::app_launcher::wait_for_target_foreground(
-                    target,
-                    std::time::Duration::from_millis(2500),
-                );
-                if !foreground {
-                    // 冷启动可能超过 activate_or_launch 的 1.5 秒前台预算：窗口在主窗口
-                    // 出现后仍留在后台。再走一次“已运行→前置”，避免冷启动首按丢焦点
-                    // （2026-10-23 网易云音乐冷启动实测：4.2 秒才出现主窗口）。
-                    crate::ble::gatt_note(
-                        "open_app_focus_retry phase=started reason=target_not_foreground"
-                            .to_owned(),
-                    );
-                    let _ = self.launch_app(target);
-                    foreground = crate::app_launcher::wait_for_target_foreground(
+                crate::focus::FocusStrategy::AutoComposer => {
+                    // 激活是异步完成的：先等目标成为前台，否则前几次尝试会打在旧前台
+                    // 应用上（与「聚焦已记录的输入框」同一理由）。
+                    let foreground = crate::app_launcher::wait_for_target_foreground(
                         target,
                         std::time::Duration::from_millis(2500),
                     );
-                    crate::ble::gatt_note(format!(
-                        "open_app_focus_retry phase=completed terminal_result={}",
-                        if foreground { "passed" } else { "failed" }
-                    ));
+                    if !foreground {
+                        // 打开本身已经成功。窗口迟迟没到前台时放弃自动聚焦，
+                        // 不把焦点抢到用户当前正在用的另一个应用上。
+                        return Ok(());
+                    }
+                    let focus = self
+                        .with_focus_runner(|runner| {
+                            runner.submit(crate::focus_service::FocusTask::LaunchThenFocus(
+                                crate::focus::FocusChoice::BestComposer,
+                            ))
+                        })
+                        .flatten();
+                    focus_submission_result(focus, "best_composer")
                 }
-                if !foreground {
-                    crate::ble::gatt_note(
-                        "open_app_focus_shortcut phase=skipped reason=target_not_foreground"
-                            .to_owned(),
-                    );
-                    return Ok(());
-                }
-                self.tap(&chord)?;
-                crate::ble::gatt_note("open_app_focus_shortcut phase=completed".to_owned());
-                // 网易云音乐的 Ctrl+F 只打开搜索页，不把焦点放进搜索框；
-                // 点击搜索框并全选旧查询，后续语音输入才会替换而不是追加。
-                if let Some((x, y)) = crate::app_launcher::preset_focus_click_point(target) {
-                    std::thread::sleep(std::time::Duration::from_millis(450));
-                    if !crate::app_launcher::wait_for_target_foreground(
-                        target,
-                        std::time::Duration::from_millis(500),
-                    ) {
+                crate::focus::FocusStrategy::AppShortcut => {
+                    let Some(chord) = profile.and_then(|profile| profile.shortcut.clone()) else {
                         crate::ble::gatt_note(
-                            "open_app_focus_click phase=skipped reason=target_not_foreground"
+                            "open_app_focus_shortcut phase=skipped reason=not_configured"
+                                .to_owned(),
+                        );
+                        return Ok(());
+                    };
+                    // 快捷键必须落在目标应用上：激活是异步的，先等目标成为前台，
+                    // 否则 Ctrl+L / Ctrl+F 会发给用户当前正在用的另一个应用。
+                    let mut foreground = crate::app_launcher::wait_for_target_foreground(
+                        target,
+                        std::time::Duration::from_millis(2500),
+                    );
+                    if !foreground {
+                        // 冷启动可能超过 activate_or_launch 的 1.5 秒前台预算：窗口在主窗口
+                        // 出现后仍留在后台。再走一次“已运行→前置”，避免冷启动首按丢焦点
+                        // （2026-10-23 网易云音乐冷启动实测：4.2 秒才出现主窗口）。
+                        crate::ble::gatt_note(
+                            "open_app_focus_retry phase=started reason=target_not_foreground"
+                                .to_owned(),
+                        );
+                        let _ = self.launch_app(target);
+                        foreground = crate::app_launcher::wait_for_target_foreground(
+                            target,
+                            std::time::Duration::from_millis(2500),
+                        );
+                        crate::ble::gatt_note(format!(
+                            "open_app_focus_retry phase=completed terminal_result={}",
+                            if foreground { "passed" } else { "failed" }
+                        ));
+                    }
+                    if !foreground {
+                        crate::ble::gatt_note(
+                            "open_app_focus_shortcut phase=skipped reason=target_not_foreground"
                                 .to_owned(),
                         );
                         return Ok(());
                     }
+                    if self.tap(&chord).is_err() {
+                        crate::ble::gatt_note(
+                            "open_app_focus_shortcut phase=failed error_code=shortcut_injection_failed"
+                                .to_owned(),
+                        );
+                        return Ok(());
+                    }
+                    crate::ble::gatt_note("open_app_focus_shortcut phase=completed".to_owned());
+                    // 网易云音乐的 Ctrl+F 只打开搜索页，不把焦点放进搜索框；
+                    // 点击搜索框并全选旧查询，后续语音输入才会替换而不是追加。
+                    if let Some((x, y)) = crate::app_launcher::preset_focus_click_point(target) {
+                        std::thread::sleep(std::time::Duration::from_millis(450));
+                        if !crate::app_launcher::wait_for_target_foreground(
+                            target,
+                            std::time::Duration::from_millis(500),
+                        ) {
+                            crate::ble::gatt_note(
+                                "open_app_focus_click phase=skipped reason=target_not_foreground"
+                                    .to_owned(),
+                            );
+                            return Ok(());
+                        }
+                        if self.runtime.move_cursor_and_click(x, y).is_err() {
+                            crate::ble::gatt_note(
+                                "open_app_focus_click phase=failed error_code=click_failed"
+                                    .to_owned(),
+                            );
+                            return Ok(());
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(120));
+                        let select_all = KeyChord {
+                            keys: vec![KeyCode::LeftControl, KeyCode::A],
+                        };
+                        if self.tap(&select_all).is_err() {
+                            crate::ble::gatt_note(
+                                "open_app_focus_click phase=failed error_code=select_all_failed"
+                                    .to_owned(),
+                            );
+                            return Ok(());
+                        }
+                        crate::ble::gatt_note("open_app_focus_click phase=completed".to_owned());
+                    }
+                    Ok(())
+                }
+                crate::focus::FocusStrategy::RecordedElement => {
+                    let Some(recorded) = profile.and_then(|profile| profile.recorded.clone())
+                    else {
+                        // 档案策略是 recorded_element 但没有目标（飞书 2026-11-15
+                        // 现场：focusProfiles 只有 strategy，recorded 缺失）。应用已经
+                        // 打开/置前，不能把“没有学习过输入框”当成打开失败。
+                        crate::ble::gatt_note(
+                            "open_app_focus_recorded_element phase=skipped reason=not_configured"
+                                .to_owned(),
+                        );
+                        return Ok(());
+                    };
+                    // 激活是异步完成的：先等目标成为前台，否则聚焦服务的前几次尝试
+                    // 会打在上一个前台应用上（嵌套动作里尤其明显）。
+                    let _ = crate::app_launcher::wait_for_target_foreground(
+                        target,
+                        std::time::Duration::from_millis(2500),
+                    );
+                    let focus = self
+                        .with_focus_runner(|runner| {
+                            runner.submit(crate::focus_service::FocusTask::LaunchThenFocus(
+                                crate::focus::FocusChoice::Recorded(recorded),
+                            ))
+                        })
+                        .flatten();
+                    focus_submission_result(focus, "recorded_element")
+                }
+                crate::focus::FocusStrategy::RecordedPoint => {
+                    let Some(point) = profile.and_then(|profile| profile.point) else {
+                        crate::ble::gatt_note(
+                            "open_app_focus_recorded_point phase=skipped reason=not_configured"
+                                .to_owned(),
+                        );
+                        return Ok(());
+                    };
+                    let absolute = crate::app_launcher::recorded_point_absolute(target, &point);
+                    let (x, y) = match absolute {
+                        Ok(position) => position,
+                        Err(_) => {
+                            crate::ble::gatt_note(
+                                "open_app_focus_recorded_point phase=failed error_code=point_unavailable"
+                                    .to_owned(),
+                            );
+                            return Ok(());
+                        }
+                    };
                     if self.runtime.move_cursor_and_click(x, y).is_err() {
                         crate::ble::gatt_note(
-                            "open_app_focus_click phase=failed error_domain=send_input error_code=click_failed retryable=true"
+                            "open_app_focus_recorded_point phase=failed error_code=click_failed"
                                 .to_owned(),
                         );
                         return Ok(());
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(120));
-                    let select_all = KeyChord {
-                        keys: vec![KeyCode::LeftControl, KeyCode::A],
-                    };
-                    if self.tap(&select_all).is_err() {
-                        crate::ble::gatt_note(
-                            "open_app_focus_click phase=failed error_domain=send_input error_code=select_all_failed retryable=true"
-                                .to_owned(),
-                        );
-                        return Ok(());
-                    }
-                    crate::ble::gatt_note("open_app_focus_click phase=completed".to_owned());
+                    Ok(())
                 }
-                Ok(())
             }
-            crate::focus::FocusStrategy::RecordedElement => {
-                let recorded = profile
-                    .and_then(|profile| profile.recorded.clone())
-                    .ok_or_else(|| "该应用还没有学习过输入框".to_owned())?;
-                // 激活是异步完成的：先等目标成为前台，否则聚焦服务的前几次尝试
-                // 会打在上一个前台应用上（嵌套动作里尤其明显）。
-                let _ = crate::app_launcher::wait_for_target_foreground(
-                    target,
-                    std::time::Duration::from_millis(2500),
-                );
-                self.with_focus_runner(|runner| {
-                    runner.submit(crate::focus_service::FocusTask::LaunchThenFocus(
-                        crate::focus::FocusChoice::Recorded(recorded),
-                    ))
-                })
-                .flatten()
-                .map(|_| ())
-                .ok_or_else(|| "聚焦服务不可用".to_owned())
-            }
-            crate::focus::FocusStrategy::RecordedPoint => {
-                let point = profile
-                    .and_then(|profile| profile.point)
-                    .ok_or_else(|| "该应用还没有记录点击位置".to_owned())?;
-                let (x, y) = crate::app_launcher::recorded_point_absolute(target, &point)?;
-                self.runtime
-                    .move_cursor_and_click(x, y)
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
-            }
-        }
+        })();
+        focus_outcome("launch_app_and_focus", focus)
     }
 
     fn focus_report(&self) -> Option<crate::focus_service::FocusReport> {
@@ -676,6 +719,38 @@ impl MappingInjector for SendInputInjector {
     fn start_app_switcher(&self) -> Result<(), String> {
         request_app_switcher_start()
     }
+}
+
+/// 聚焦请求提交失败不把“打开应用”判为失败。
+///
+/// 应用已经打开/置前；聚焦档案可能因应用更新、UIA 树变化而失效（2026-11-15
+/// 飞书现场：`focusProfiles` 只有 `strategy=recorded_element`、`recorded` 缺失，
+/// 每次 `map_launch result=err`，但 `foreground_after_launch` 已 passed）。
+/// 若把聚焦问题传播为打开失败，宿主不会 `target_opened`，下一条按键仍落到旧应用。
+/// 聚焦任务的实际结果由 `focus_report` 异步记录，这里只处理提交失败。
+fn focus_submission_result(focus: Option<u64>, step: &'static str) -> Result<(), String> {
+    if focus.is_some() {
+        crate::ble::gatt_note(format!("open_app_focus_{step} phase=submitted"));
+    } else {
+        crate::ble::gatt_note(format!(
+            "open_app_focus_{step} phase=deferred reason=focus_service_unavailable"
+        ));
+    }
+    Ok(())
+}
+
+/// 打开成功后的聚焦策略统一兜底：聚焦失败只记录，不改变“打开应用”的结果。
+///
+/// `AppShortcut` 缺快捷键/注入失败、`RecordedPoint` 缺位置/解析失败、
+/// `AutoComposer` 聚焦服务不可用等都必须走这里，避免宿主把已经成功的打开
+/// 记成 `map_launch result=err` 而不切换前台方案。
+fn focus_outcome(step: &'static str, focus: Result<(), String>) -> Result<(), String> {
+    if focus.is_err() {
+        crate::ble::gatt_note(format!(
+            "open_app_focus phase=failed step={step} error_domain=focus_non_fatal"
+        ));
+    }
+    Ok(())
 }
 
 pub type ButtonEdgeCallback = Arc<dyn Fn(ButtonEdge) + Send + Sync>;
@@ -1232,6 +1307,20 @@ fn request_app_switcher_start() -> Result<(), String> {
         .map_err(|_| "app_switcher_engine_disconnected".to_owned())
 }
 
+/// 应用切换器会话启动前撤掉自身置顶位。
+///
+/// 按键动作和组合动作是两条独立入口（`ButtonAction::AppSwitcher` /
+/// `EngineMessage::StartAppSwitcher`），必须共用这一层兜底：若无线麦在后台
+/// 带 `WS_EX_TOPMOST`，`Focused(false)` 不会再触发，确认到别的应用后它仍会
+/// 压在目标上面（2026-11-19 现场）。`source` 只写日志，区分入口。
+fn drop_stale_topmost_for_app_switcher(source: &'static str) {
+    if crate::app_launcher::request_self_drop_topmost() {
+        crate::ble::gatt_note(format!(
+            "window_topmost_guard reason=app_switcher_start dropped=true terminal_result=passed source={source}"
+        ));
+    }
+}
+
 /// 把定时器到期的**连续拍**并入聚合；`advance_with_ticks` 的第二返回值以外
 /// 的手势（双击窗补发的单击、首次长按）是一次性手势，不进聚合
 /// （2026-10-05 评审发现 1：避免把点按记成 `map_repeat`，污染拍数与时长）。
@@ -1563,6 +1652,8 @@ fn engine_worker(
                     let io = InjectorAppSwitcherIo(injector.as_ref());
                     let was_active = app_switcher.is_active();
                     if !was_active {
+                        // 组合动作入口与按键入口共用撤顶兜底（2026-11-19）。
+                        drop_stale_topmost_for_app_switcher("macro");
                         key_gate::set_app_switcher_mask(app_switcher::control_mask());
                         injector.common_phrase_host().close("app_switcher");
                     }
@@ -2084,6 +2175,18 @@ fn fire_gesture(
         }
         ButtonAction::Shortcut { chord } => {
             let terminal_action = chord.is_lock_workstation();
+            // 一次性 Alt+Tab 快捷键也要先撤顶：它不经过 `AppSwitcher` 分支，
+            // 报告里的“按键设为 Alt+Tab”可能正是这条旧绑定。若无线麦在后台
+            // 带置顶位，`Focused(false)` 不会触发，必须在注入前兜底。
+            if chord.is_alt_tab() {
+                let dropped = crate::app_launcher::request_self_drop_topmost();
+                if dropped {
+                    crate::ble::gatt_note(
+                        "window_topmost_guard reason=alt_tab_shortcut dropped=true terminal_result=passed"
+                            .to_owned(),
+                    );
+                }
+            }
             crate::ble::gatt_note(format!(
                 "map_fire button={:?} trigger={:?} action=shortcut chord={}",
                 button,
@@ -2209,6 +2312,11 @@ fn fire_gesture(
             let io = InjectorAppSwitcherIo(injector.as_ref());
             let was_active = app_switcher.is_active();
             if !was_active {
+                // 会话启动前先撤掉自身置顶：切换器目标可能是无线麦自己，
+                // 而 `Focused(false)` 只在无线麦失焦时触发；若置顶位是在
+                // 后台被外部工具设置/恢复的，失焦兜底不会再跑，确认到别的
+                // 应用后无线麦仍会压在目标上面（2026-11-19 现场缺口）。
+                drop_stale_topmost_for_app_switcher("button");
                 // 会话期间 OK/返回/方向/TV 由门控直接吞下：这些键即使没有
                 // 映射，原生动作也会漏进系统切换器或目标应用。
                 key_gate::set_app_switcher_mask(app_switcher::control_mask());
@@ -2359,6 +2467,66 @@ mod tests {
     use crate::send_input::{ButtonAction, ButtonActions, KeyCode};
     use std::sync::Mutex as StdMutex;
     use std::time::{Duration, Instant};
+
+    /// 应用切换器启动前必须撤掉自身置顶位。
+    ///
+    /// `Focused(false)` 只在无线麦失焦时触发；如果置顶位是在后台被外部工具
+    /// 设置/恢复的，失焦兜底不会再跑，确认到别的应用后无线麦仍会压住目标
+    /// （2026-11-19 现场缺口）。这里用源码契约锁住引擎侧的启动兜底。
+    #[test]
+    fn app_switcher_start_drops_stale_topmost_before_opening_switcher() {
+        let source = include_str!("button_mapping.rs");
+        let start = source
+            .find("ButtonAction::AppSwitcher =>")
+            .expect("fire_gesture 必须保留 AppSwitcher 分支");
+        let end = source[start..]
+            .find("ButtonAction::OpenCommonPhrases =>")
+            .map(|offset| start + offset)
+            .expect("AppSwitcher 分支后必须保留 OpenCommonPhrases 分支");
+        assert!(
+            source[start..end].contains("drop_stale_topmost_for_app_switcher(\"button\")"),
+            "按键启动应用切换器前必须撤掉自身置顶位，否则后台置顶时目标仍会被压在下面"
+        );
+
+        let macro_start = source
+            .find("EngineMessage::StartAppSwitcher =>")
+            .expect("引擎必须保留组合动作启动切换器的入口");
+        let macro_end = source[macro_start..]
+            .find("EngineMessage::ReleaseAppSwitcherForExit")
+            .map(|offset| macro_start + offset)
+            .expect("StartAppSwitcher 分支后必须保留退出收尾入口");
+        assert!(
+            source[macro_start..macro_end]
+                .contains("drop_stale_topmost_for_app_switcher(\"macro\")"),
+            "组合动作启动应用切换器前也必须撤顶，否则两条入口行为不一致"
+        );
+    }
+
+    /// 一次性 Alt+Tab 快捷键也必须先撤顶。
+    ///
+    /// 旧的一次性 `Alt+Tab` 绑定保留字面语义，不经过 `AppSwitcher` 分支；
+    /// 后台置顶时只能靠注入前这层兜底。用源码契约锁住它，避免以后只保留
+    /// 会话路径。
+    #[test]
+    fn alt_tab_shortcut_drops_stale_topmost_before_injection() {
+        let source = include_str!("button_mapping.rs");
+        let start = source
+            .find("ButtonAction::Shortcut { chord } =>")
+            .expect("fire_gesture 必须保留 Shortcut 分支");
+        let end = source[start..]
+            .find("ButtonAction::OpenApp { target } =>")
+            .map(|offset| start + offset)
+            .expect("Shortcut 分支后必须保留 OpenApp 分支");
+        let branch = &source[start..end];
+        assert!(
+            branch.contains("chord.is_alt_tab()"),
+            "一次性 Alt+Tab 快捷键必须识别 Alt+Tab 组合"
+        );
+        assert!(
+            branch.contains("request_self_drop_topmost()"),
+            "一次性 Alt+Tab 注入前必须撤掉自身置顶位，否则后台置顶时目标仍会被压在下面"
+        );
+    }
 
     /// 测试注入器：记录 tap 的和弦与打开应用的目标。
     #[derive(Debug, Default)]
@@ -3587,6 +3755,25 @@ mod tests {
             &[target.to_owned()]
         );
         drop(gate);
+    }
+
+    /// 飞书 2026-11-15 现场：应用已打开并置前，但 recorded_element 聚焦失败，
+    /// 整个 `launch_app_and_focus` 被判为 Err，宿主不切前台方案。聚焦失败必须是
+    /// 非致命：打开成功仍然是成功，只单独记录聚焦失败原因。
+    #[test]
+    fn focus_submission_failure_does_not_fail_open_app() {
+        assert!(focus_submission_result(Some(1), "recorded_element").is_ok());
+        assert!(focus_submission_result(None, "recorded_element").is_ok());
+        assert!(focus_submission_result(None, "best_composer").is_ok());
+    }
+
+    /// 评审补强：打开成功后的聚焦步骤（缺快捷键/缺点击位置/注入失败）统一走
+    /// `focus_outcome`，任何 Err 都只能记录，不能把打开结果改成失败。
+    #[test]
+    fn focus_step_failure_does_not_fail_open_app() {
+        assert!(focus_outcome("app_shortcut", Err("missing shortcut".to_owned())).is_ok());
+        assert!(focus_outcome("recorded_point", Err("missing point".to_owned())).is_ok());
+        assert!(focus_outcome("launch_app_and_focus", Ok(())).is_ok());
     }
 
     /// Chrome 聚焦地址栏、网易云音乐聚焦搜索框：使用公开快捷键，
